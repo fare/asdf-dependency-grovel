@@ -7,6 +7,7 @@
   "Set the last element in a list to the given value."
   (multiple-value-bind (dummies vals newval setter getter)
       (get-setf-expansion x env)
+    (declare (ignore newval setter))
     (let ((store (gensym)))
       (values dummies
               vals

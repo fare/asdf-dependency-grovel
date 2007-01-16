@@ -1,8 +1,12 @@
-(cl:defpackage :test-asdf-dependency-grovel
+;;; Define the package of the test framework
+(cl:defpackage :asdf-dependency-grovel-tester
   (:use :cl)
   (:export #:test-result))
 
-(cl:in-package :test-asdf-dependency-grovel)
+(cl:in-package :asdf-dependency-grovel-tester)
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (require :asdf))
 
 (define-condition failed-component ()
   ((file :accessor failed-file :initarg :file)
@@ -22,6 +26,7 @@
                :file file :should dependency
                :has depends-on)))))
 
+(load "../asdf-dependency-grovel.asd")
 (load "test-serial.asd")
 (asdf:oos 'asdf-dependency-grovel:dependency-op :asdf-dependency-grovel-test/generator)
 
