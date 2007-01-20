@@ -69,6 +69,7 @@
                ;; package system
                (:file "u-defpackage")
                (:file "u-defpackage.1")
+               (:file "u-defpackage.2")
                
                ;; defunoids / instrumented stuff
                (:file "u-defun")

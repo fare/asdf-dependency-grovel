@@ -124,10 +124,10 @@ keeping declarations intact."
                               and collect elt into modifiers
                               and collect elt
                               and append (instrument-defun-body body
-                                              `(signal-macroexpansion
-                                                      *user-hook*
-                                                      '(,name ,@modifiers)
-                                                      'defmethod))
+                                                    `(signal-macroexpansion
+                                                            *user-hook*
+                                                            '(,name ,@modifiers)
+                                                            'defmethod))
                               and do (loop-finish)
                             collect elt))))
          ;; (format *debug-io* "~&~S becomes:~&~S~%~%" form new-expansion)
@@ -145,9 +145,30 @@ keeping declarations intact."
       ((defstruct)
        (signal-macroexpansion *provider-hook* (second form) 'defclass))
       ((defpackage)
-       (signal-macroexpansion *provider-hook* (canonical-package-name (second form)) 'defpackage)
-       (loop for nickname in (rest (assoc :nicknames (nthcdr 2 form)))
-             do (signal-macroexpansion *provider-hook* nickname 'defpackage)))
+       (signal-macroexpansion *provider-hook*
+                              (canonical-package-name (second form))
+                              'defpackage)
+       (labels ((clause-contents (clause-name &optional (filter #'rest))
+                  (mapcar #'canonical-package-name
+                          (reduce #'append
+                                  (mapcar filter
+                                          (remove-if-not (lambda (clause)
+                                                           (eql clause-name
+                                                                (first clause)))
+                                                         (nthcdr 2 form))))))
+                (clause-second-element (clause)
+                  (list (second clause))))
+         (loop for nickname in (clause-contents :nickname)
+               do (signal-macroexpansion *provider-hook* nickname 'defpackage))
+         ;; signal :uses of packages
+         (loop for use in (append (clause-contents :use)
+                                  (clause-contents :import-from
+                                         #'clause-second-element)
+                                  (clause-contents :shadowing-import-from
+                                         #'clause-second-element))
+               do (signal-macroexpansion *user-hook*
+                                         (canonical-package-name use)
+                         'defpackage))))
       ((in-package)
        (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
 
@@ -174,7 +195,7 @@ keeping declarations intact."
              (funcall *old-macroexpand-hook* fun
                       `(,defun ,name ,arg-list
                          ,@(instrument-defun-body maybe-body
-                                            `(signal-macroexpansion *user-hook* ',name 'defun)))
+                                                  `(signal-macroexpansion *user-hook* ',name 'defun)))
                       env)))))
       (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
   (signal-symbol-use-in-form form)
