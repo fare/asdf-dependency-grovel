@@ -1,7 +1,9 @@
 (cl:in-package #:asdf-dependency-grovel)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defclass instrumented-cl-source-file (asdf:cl-source-file) ()))
+  (defclass instrumented-cl-source-file (asdf:cl-source-file)
+       ((output-file-type :initarg :output-file-type
+                          :reader output-file-type))))
 
 (defmethod asdf:output-files :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
   "Put instrumented FASL files in a temporary directory relative

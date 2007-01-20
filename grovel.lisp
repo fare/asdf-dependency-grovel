@@ -290,11 +290,27 @@ keeping declarations intact."
                   for 1-dependencies = (gethash component dependencies)
                   do (let ((*package* (find-package :keyword)))
                        (format stream "~& (~S ~A :depends-on ~:A)~%"
-                               (if (eql (class-of component)
-                                        (find-class (or (asdf::module-default-component-class (asdf:component-parent component))
-                                                        'asdf:cl-source-file)))
-                                   :file
-                                   (class-name (class-of component)))
+                               (cond
+                                 
+                                 ;; standard instrumented component with no output file type, and
+                                 ;; default-component-type files are emitted as :file.
+                                 ((and (typep component 'instrumented-cl-source-file)
+                                       (not (slot-boundp component 'output-file-type)))
+                                  :file)
+                                 ((and (not (typep component 'instrumented-cl-source-file))
+                                       (eql (class-of component)
+                                            (find-class (or
+                                                         (asdf::module-default-component-class
+                                                          (asdf:component-parent component))
+                                                         'asdf:cl-source-file))))
+                                  :file)
+                                 ;; instrumented components with output file types emit
+                                 ;; their output file type
+                                 ((typep component 'instrumented-cl-source-file)
+                                  (class-name (find-class (output-file-type component))))
+                                 ;; other types get their class name.
+                                 (t
+                                  (class-name (class-of component))))
                                (component-name component t)
                                `(,@(sort
                                     `(,@(or (cdr (assoc (enough-component-spec component) override-dependencies
