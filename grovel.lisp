@@ -275,6 +275,7 @@ keeping declarations intact."
               )
           (asdf:oos 'asdf:load-op system :verbose verbose))
         (let ((*print-case* :downcase))
+          (format stream ";;; This file contains -*- lisp -*- expressions.~%")
           (format stream "~@<;;; ~@;AUTO-GENERATED file from system definition of system ~A in ~
                                    ~A.
                                    Instead of directly editing this file, please edit the system definition~P of~
