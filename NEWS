@@ -1,3 +1,6 @@
+* Changes in 0.6.3 relative to 0.6.2:
+** Fixed a silly bug in the last refactoring that caused duplicate names.
+
 * Changes in 0.6.2 relative to 0.6.1:
 ** Added Class instrumented-module:
 *** This class has a :default-component-type of
