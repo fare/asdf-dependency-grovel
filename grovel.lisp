@@ -240,15 +240,14 @@ their :additional-dependencies."
   (map-over-instrumented-component-and-parents component 'overridden-dependencies))
 
 (defun maybe-translated-component-name (component &key include-pathname)
-  (format nil "~A~@[ :pathname #.~S~]"
-          (if (and (typep component 'instrumented-cl-source-file)
+  
+  (if (and (typep component 'instrumented-cl-source-file)
                    (slot-boundp component 'translated-name))
+      (format nil "~A~@[ :pathname #.~S~]"
               (slot-value component 'translated-name)
-              (prin1-to-string (asdf:component-name component)))
-          (and include-pathname
-               (typep component 'instrumented-cl-source-file)
-               (slot-boundp component 'translated-pathname)
-               (slot-value component 'translated-pathname))))
+              (and include-pathname
+                   (slot-value component 'translated-pathname)))
+      (enough-component-spec component include-pathname)))
 
 (defun grovel-dependencies (system stream &key interesting verbose cull-redundant)
   (let* ((system (asdf:find-system system))
