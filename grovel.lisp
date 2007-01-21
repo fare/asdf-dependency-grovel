@@ -216,15 +216,41 @@ keeping declarations intact."
                 (pathname-name pn)))))
 
 (defun system-file-components (system)
+  "Flatten the tree of modules/components into a list that
+contains only the non-module components."
   (loop for component in (asdf:module-components system)
         if (typep component 'asdf:module)
           append (system-file-components component)
         else
           collect component))
 
-(defun grovel-dependencies (system stream &key
-                            interesting override-dependencies additional-dependencies verbose
-                            component-name-translation cull-redundant)
+(defun map-over-instrumented-component-and-parents (component slot-name)
+  (loop for c = component then (asdf:component-parent c)
+        until (null c)
+        when (and (typep c 'instrumented-component)
+                  (slot-boundp c slot-name))
+          append (slot-value c slot-name)))
+
+(defun additional-dependencies* (component)
+  "Walk the tree up through all parent components and collect
+their :additional-dependencies."
+  (map-over-instrumented-component-and-parents component 'additional-dependencies))
+
+(defun overridden-dependencies* (component)
+  (map-over-instrumented-component-and-parents component 'overridden-dependencies))
+
+(defun maybe-translated-component-name (component &key include-pathname)
+  (format nil "~A~@[ :pathname #.~S~]"
+          (if (and (typep component 'instrumented-cl-source-file)
+                   (slot-boundp component 'translated-name))
+              (slot-value component 'translated-name)
+              (prin1-to-string (asdf:component-name component)))
+          (and include-pathname
+               (typep component 'instrumented-cl-source-file)
+               (slot-boundp component 'translated-pathname)
+               (slot-value component 'translated-pathname))))
+
+(defun grovel-dependencies (system stream &key interesting verbose cull-redundant)
   (let* ((system (asdf:find-system system))
          (providers (make-hash-table :test #'equal))
          (dependencies (make-hash-table :test #'eql))
@@ -238,13 +264,6 @@ keeping declarations intact."
          (*grovel-dir-suffix* (get-universal-time)))
     (labels ((interestingp (component)
                (member (asdf:component-system component) interesting :test #'eql))
-             (component-name (component &optional pn-p)
-               (or (let ((translated-name (assoc (enough-component-spec component) component-name-translation
-                                                 :test #'equal)))
-                     (if pn-p
-                         (third translated-name)
-                         (second translated-name)))
-                   (enough-component-spec component pn-p)))
              (redundantp (from to)
                (labels ((redundantp-1 (from-1)
                           (let ((from-deps (gethash from-1 dependencies)))
@@ -290,8 +309,8 @@ keeping declarations intact."
                   for 1-dependencies = (gethash component dependencies)
                   do (let ((*package* (find-package :keyword)))
                        (format stream "~& (~S ~A :depends-on ~:A)~%"
+                               ;; component class:
                                (cond
-                                 
                                  ;; standard instrumented component with no output file type, and
                                  ;; default-component-type files are emitted as :file.
                                  ((and (typep component 'instrumented-cl-source-file)
@@ -311,17 +330,21 @@ keeping declarations intact."
                                  ;; other types get their class name.
                                  (t
                                   (class-name (class-of component))))
-                               (component-name component t)
-                               `(,@(sort
-                                    `(,@(or (cdr (assoc (enough-component-spec component) override-dependencies
-                                                        :test #'equal))
-                                            (mapcar #'component-name
-                                                    (remove-if (lambda (comp)
-                                                                 (and cull-redundant (redundantp component comp)))
-                                                               1-dependencies)))
-                                        ,@(cdr (assoc (enough-component-spec component) additional-dependencies
-                                                      :test #'equal)))
-                                    #'string<))))))
+
+                               ;; component names:
+                               (maybe-translated-component-name component :include-pathname t)
+
+                               ;; component dependencies:
+                               (remove-duplicates
+                                `(,@(sort
+                                     `(,@(or (overridden-dependencies* component)
+                                             (mapcar #'maybe-translated-component-name
+                                                     (remove-if (lambda (comp)
+                                                                  (and cull-redundant (redundantp component comp)))
+                                                                1-dependencies)))
+                                         ,@(additional-dependencies* component))
+                                     #'string<))
+                                :test #'equal)))))
           (format stream "~&)~%"))))))
 
 

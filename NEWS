@@ -1,0 +1,24 @@
+* Changes in 0.6.2 relative to 0.6.1:
+** Added Class instrumented-module:
+*** This class has a :default-component-type of
+    instrumented-cl-source-file, and initargs :additional-dependencies
+    and :override-dependencies, which control the dependencies of the
+    components the module contains.
+** Added initargs to instrumented-cl-source-file:
+*** :translated-name replaces the :component-translations initarg of
+    the component-file component.
+*** :translated-pathname-form replaces the pathname part of the
+    :component-translations in component-file.
+*** :additional-dependencies and :override-dependencies as in
+    instrumented-module.
+** It is no longer possible to pass alist translations to the
+   component-file component; instead, use instrumented-cl-source-file
+   and instrumented-module components in the instrumented systems and
+   pass the translations directly.
+
+* Changes in 0.6.1 relative to 0.6.0:
+** Added :output-file-type to the initargs of
+   instrumented-cl-source-file. The value of this argument will be
+   emitted as the output component's component type.
+
+* 0.6.0: initial release.

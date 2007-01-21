@@ -1,9 +1,22 @@
 (cl:in-package #:asdf-dependency-grovel)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defclass instrumented-cl-source-file (asdf:cl-source-file)
+  (defclass instrumented-component ()
+       ((additional-dependencies :initarg :additional-dependencies
+                                 :reader additional-dependencies)
+        (overridden-dependencies :initarg :override-dependencies
+                                 :reader overridden-dependencies)))
+  (defclass instrumented-cl-source-file (asdf:cl-source-file
+                                         instrumented-component)
        ((output-file-type :initarg :output-file-type
-                          :reader output-file-type))))
+                          :reader output-file-type)
+        (translated-name :initarg :translated-name
+                         :reader translated-name)
+        (translated-pathname :initarg :translated-pathname-form
+                             :reader translated-pathname)))
+  (defclass instrumented-module (asdf:module instrumented-component)
+       ()
+    (:default-initargs :default-component-class 'instrumented-cl-source-file)))
 
 (defmethod asdf:output-files :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
   "Put instrumented FASL files in a temporary directory relative
@@ -41,8 +54,6 @@ to the base of the system."
 (defclass component-file (asdf:source-file)
      ((load-system :initarg :load-system)
       (merge-systems :initarg :merge-systems)
-      (additional-dependencies :initarg :additional-dependencies :initform nil)
-      (component-name-translation :initarg :component-name-translation :initform nil)
       (cull-redundant :initarg :cull-redundant :initform nil)
       (verbose :initarg :verbose :initform t)
       (output-file :initarg :output-file)))
@@ -75,7 +86,5 @@ to the base of the system."
                              additional-dependencies) c
        (grovel-dependencies load-system clim-components
                             :interesting (mapcar #'asdf:find-system merge-systems)
-                            :component-name-translation component-name-translation
-                            :additional-dependencies additional-dependencies
                             :cull-redundant cull-redundant
                             :verbose verbose))))
