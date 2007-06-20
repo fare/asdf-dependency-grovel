@@ -16,10 +16,19 @@
 (defun canonicalize-name (name)
   (subseq name (mismatch "u-" name) (position #\. name)))
 
-(defun 1-component (&key file depends-on)
+(defun 1-component (all-comps &key file depends-on)
   (when (eql 2 (mismatch "u-" file))
     (let* ((name (canonicalize-name file))
-           (dependency (list (format nil "p-~A" name)))
+           (provider-comp (format nil "p-~A" name))
+           (dependency (mapcar (lambda (comp)
+                                 (getf comp :file))
+                               (remove-if-not
+                                (lambda (comp
+                                         &aux (mismatch
+                                               (mismatch provider-comp (getf comp :file))))
+                                  (or (not mismatch)
+                                      (eql (length provider-comp) mismatch)))
+                                all-comps)))
            (depends-on (remove "package" depends-on :test #'equal)))
       (unless (equal dependency depends-on)
         (error 'failed-component
@@ -35,7 +44,7 @@
     (let ((comps (read f))
           (failed nil))
       (loop for comp in comps
-            do (handler-case (apply #'1-component comp)
+            do (handler-case (apply #'1-component comps comp)
                  (failed-component (c)
                    (push (list (failed-file c) (failed-dependency c) (actual-dependency c))
                          failed))))
