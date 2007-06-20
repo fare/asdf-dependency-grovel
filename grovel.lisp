@@ -87,6 +87,40 @@ keeping declarations intact."
               and do (loop-finish)
             collect elt)))
 
+(defun gethash* (hash-table &rest keys)
+  (if (null (rest keys))
+      (gethash (first keys) hash-table nil)
+      (apply #'gethash* (gethash (first keys) hash-table
+                                 (make-hash-table :test
+                                                  (hash-table-test hash-table)))
+             (rest keys))))
+
+(defun set-gethash* (new-value hash-table keys)
+  (if (null (rest keys))
+      (setf (gethash (first keys) hash-table) new-value)
+      (let ((subhash (or (gethash (first keys) hash-table)
+                         (make-hash-table :test (hash-table-test hash-table)))))
+        (setf (gethash (first keys) hash-table) subhash)
+        (set-gethash* new-value subhash (rest keys)))))
+
+(defun (setf gethash*) (new-value hash-table &rest keys)
+  (set-gethash* new-value hash-table keys))
+
+(defun collect-provided-symbols (&optional
+                                 (collect-syms t)
+                                 (package-contents *current-package-contents*))
+  (loop for package in (list-all-packages)
+        nconc
+        (loop for symbol being the symbols of package
+              for exportedp = (nth-value 1 (find-symbol (string symbol) package))
+              unless (or (not collect-syms)
+                         (and (gethash* package-contents package symbol)
+                              (eql exportedp
+                               (gethash* package-contents package symbol))))
+                collect (list (canonical-package-name package) (string symbol)
+                              exportedp)
+              do (setf (gethash* package-contents package symbol) exportedp))))
+
 (defun instrumenting-macroexpand-hook (fun form env)
   (when (listp form)
     (case (unalias-symbol (first form))
@@ -97,7 +131,6 @@ keeping declarations intact."
       ((setf)
        (when (listp (second form))
          (signal-macroexpansion *user-hook* (first (second form)) 'setf)))
-                  
       ((defgeneric)
        (signal-macroexpansion *provider-hook* (second form) 'defgeneric)
        (let ((method-combination (second (assoc :method-combination (nthcdr 3 form)))))
@@ -168,7 +201,20 @@ keeping declarations intact."
                                          #'clause-second-element))
                do (signal-macroexpansion *user-hook*
                                          (canonical-package-name use)
-                         'defpackage))))
+                         'defpackage))
+         ;; signal imports of symbols (they need to exist before they can
+         ;; be imported)
+         (loop for (clause-name pkg . symbols)
+               in (remove-if-not (lambda (clause)
+                                   (member (first clause)
+                                           '(:import-from
+                                             :shadowing-import-from)))
+                                 (nthcdr 2 form))
+               do (loop for sym in symbols
+                        do (signal-macroexpansion *user-hook*
+                                                  (cons (canonical-package-name pkg)
+                                                        (string sym))
+                                  'symbol)))))
       ((in-package)
        (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
 
@@ -197,9 +243,9 @@ keeping declarations intact."
                          ,@(instrument-defun-body maybe-body
                                                   `(signal-macroexpansion *user-hook* ',name 'defun)))
                       env)))))
-      (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
-  (signal-symbol-use-in-form form)
-  (funcall *old-macroexpand-hook* fun form env))
+      (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro)))
+    (signal-symbol-use-in-form form)
+    (funcall *old-macroexpand-hook* fun form env)))
 
 
 ;;; The actual groveling part.
@@ -259,7 +305,7 @@ their :additional-dependencies."
          (*symbol-translations* (make-hash-table))
          (*default-pathname-defaults* (truename
                                        (make-pathname :type nil :name nil
-                                                      :defaults (asdf:component-pathname system))))
+                                                                :defaults (asdf:component-pathname system))))
          (*grovel-dir-suffix* (get-universal-time)))
     (labels ((interestingp (component)
                (member (asdf:component-system component) interesting :test #'eql))

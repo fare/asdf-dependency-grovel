@@ -47,6 +47,9 @@
                (:file "p-define-symbol-macro")
                (:file "p-defconstant")
 
+               ;; symbols and defpackage
+               (:file "p-symbols")
+               (:file "p-symbols.interns")
 
                ;; users
                
@@ -74,4 +77,7 @@
                ;; defunoids / instrumented stuff
                (:file "u-defun")
                (:file "u-define-symbol-macro")
-               (:file "u-defconstant")))
+               (:file "u-defconstant")
+
+               ;; symbols
+               (:file "u-symbols")))

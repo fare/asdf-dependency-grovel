@@ -41,12 +41,20 @@ to the base of the system."
          output-file))))
 
 (defmethod asdf:perform :around ((op asdf:load-op) (comp instrumented-cl-source-file))
-  (let ((*current-component* comp))
-    (call-next-method)))
+  (let ((*current-component* comp)
+        (*current-package-contents* (make-hash-table)))
+    (collect-provided-symbols nil)
+    (call-next-method)
+    (loop for (pkg sym exportedp) in (collect-provided-symbols)
+          do (signal-macroexpansion *provider-hook* (cons pkg sym) 'symbol))))
 
 (defmethod asdf:perform :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
-  (let* ((*current-component* comp))
-    (call-next-method)))
+  (let ((*current-component* comp)
+        (*current-package-contents* (make-hash-table)))
+    (collect-provided-symbols nil)
+    (call-next-method)
+    (loop for (pkg sym exportedp) in (collect-provided-symbols)
+          do (signal-macroexpansion *provider-hook* (cons pkg sym) 'symbol))))
 
 ;;; TODO for asdf-component/op:
 ;;; * ignore component-name. I have no idea what it /should/ indicate.

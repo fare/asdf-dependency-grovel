@@ -10,6 +10,10 @@
 (defvar *current-component* nil
   "The currently loaded/compiled ASDF component")
 
+(defvar *current-package-contents* nil
+  "Is bound to a datastructure which resolves symbols contained in
+packages at one time.")
+
 (defvar *symbol-translations* nil
   "Hash table containing patched-symbol -> ansi-symbol translations")
 
