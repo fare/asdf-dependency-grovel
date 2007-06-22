@@ -84,15 +84,21 @@ to the base of the system."
   nil)
 
 (defmethod asdf:perform ((op dependency-op) (c component-file))
-  (with-open-file (clim-components (merge-pathnames (slot-value c 'output-file)
-                                                    (asdf:component-pathname c))
-                                   :direction :output
-                                   :if-does-not-exist :create
-                                   :if-exists :supersede)
+  (with-open-file (component-stream (merge-pathnames (slot-value c 'output-file)
+                                                     (asdf:component-pathname c))
+                                    :direction :output
+                                    :if-does-not-exist :create
+                                    :if-exists :supersede)
     (with-slots (load-system merge-systems
                              component-name-translation cull-redundant verbose
                              additional-dependencies) c
-       (grovel-dependencies load-system clim-components
+       (grovel-dependencies load-system component-stream
                             :interesting (mapcar #'asdf:find-system merge-systems)
                             :cull-redundant cull-redundant
-                            :verbose verbose))))
+                            :verbose verbose
+                            :base-pathname
+                            (truename
+                             (make-pathname :name nil
+                                            :type nil
+                                            :defaults
+                                            (asdf:component-pathname c)))))))

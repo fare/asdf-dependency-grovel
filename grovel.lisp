@@ -295,7 +295,12 @@ their :additional-dependencies."
                    (slot-value component 'translated-pathname)))
       (enough-component-spec component include-pathname)))
 
-(defun grovel-dependencies (system stream &key interesting verbose cull-redundant)
+(defun grovel-dependencies (system stream &key interesting verbose cull-redundant
+                            (base-pathname (truename
+                                            (make-pathname
+                                             :type nil
+                                             :name nil
+                                             :defaults (asdf:component-pathname system)))))
   (let* ((system (asdf:find-system system))
          (providers (make-hash-table :test #'equal))
          (dependencies (make-hash-table :test #'eql))
@@ -303,9 +308,7 @@ their :additional-dependencies."
          (*old-macroexpand-hook* *macroexpand-hook*)
          (*macroexpand-hook* #'instrumenting-macroexpand-hook)
          (*symbol-translations* (make-hash-table))
-         (*default-pathname-defaults* (truename
-                                       (make-pathname :type nil :name nil
-                                                                :defaults (asdf:component-pathname system))))
+         (*default-pathname-defaults* base-pathname)
          (*grovel-dir-suffix* (get-universal-time)))
     (labels ((interestingp (component)
                (member (asdf:component-system component) interesting :test #'eql))
