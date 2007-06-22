@@ -52,7 +52,7 @@
   (let ((new-name (gentemp)))
     `(progn
        (define-symbol-macro ,name ,new-name)
-       ,(macroexpand-1 `(,operator ,new-name ,@args) env))))
+       ,(macroexpand `(,operator ,new-name ,@args) env))))
 
 (defmacro define-symbol-alias (new-symbol ansi-symbol)
   `(eval-when (:compile-toplevel :load-toplevel :execute)
