@@ -2,18 +2,21 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defclass instrumented-component ()
-       ((additional-dependencies :initarg :additional-dependencies
+       ((translated-name :initarg :translated-name
+                         :reader translated-name)
+        (translated-pathname :initarg :translated-pathname-form
+                             :reader translated-pathname)
+        (output-file-type :initarg :output-file-type
+                          :reader output-file-type)
+        (additional-dependencies :initarg :additional-dependencies
+                                 :initform nil
                                  :reader additional-dependencies)
         (overridden-dependencies :initarg :override-dependencies
                                  :reader overridden-dependencies)))
   (defclass instrumented-cl-source-file (asdf:cl-source-file
                                          instrumented-component)
-       ((output-file-type :initarg :output-file-type
-                          :reader output-file-type)
-        (translated-name :initarg :translated-name
-                         :reader translated-name)
-        (translated-pathname :initarg :translated-pathname-form
-                             :reader translated-pathname)))
+       ((additional-initargs :initarg :additional-initargs
+                             :reader additional-initargs)))
   (defclass instrumented-module (asdf:module instrumented-component)
        ()
     (:default-initargs :default-component-class 'instrumented-cl-source-file)))

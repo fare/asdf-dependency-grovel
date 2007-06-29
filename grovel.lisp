@@ -172,13 +172,13 @@ keeping declarations intact."
       ((in-package)
        (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
 
-      ((defconstant)
+      ((defconstant)       
        (signal-macroexpansion *provider-hook* (second form) (first form))
        (return-from instrumenting-macroexpand-hook
-         (let ((*macroexpand-hook* *old-macroexpand-hook*))
-           (funcall *old-macroexpand-hook* (macro-function 'symbol-macroify)
-                    `(symbol-macroify ,@form) env))))
-
+         (let* ((*macroexpand-hook* *old-macroexpand-hook*)
+                (expansion (funcall *old-macroexpand-hook* (macro-function 'symbol-macroify)
+                                    `(symbol-macroify ,@form) env)))
+           expansion)))
       ((define-symbol-macro)
        (destructuring-bind (def name expansion) form
          (signal-macroexpansion *provider-hook* name def)
@@ -199,7 +199,8 @@ keeping declarations intact."
                       env)))))
       (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
   (signal-symbol-use-in-form form)
-  (funcall *old-macroexpand-hook* fun form env))
+  (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
+    expanded))
 
 
 ;;; The actual groveling part.
@@ -241,7 +242,7 @@ their :additional-dependencies."
 
 (defun maybe-translated-component-name (component &key include-pathname)
   
-  (if (and (typep component 'instrumented-cl-source-file)
+  (if (and (typep component 'instrumented-component)
                    (slot-boundp component 'translated-name))
       (format nil "~A~@[ :pathname #.~S~]"
               (slot-value component 'translated-name)
@@ -310,7 +311,7 @@ their :additional-dependencies."
             (loop for component in (system-file-components system)
                   for 1-dependencies = (gethash component dependencies)
                   do (let ((*package* (find-package :keyword)))
-                       (format stream "~& (~S ~A :depends-on ~:A)~%"
+                       (format stream "~& (~S ~A~%  :depends-on ~:A~@[~%  ~{ ~S~}~])~%"
                                ;; component class:
                                (cond
                                  ;; standard instrumented component with no output file type, and
@@ -327,7 +328,7 @@ their :additional-dependencies."
                                   :file)
                                  ;; instrumented components with output file types emit
                                  ;; their output file type
-                                 ((typep component 'instrumented-cl-source-file)
+                                 ((typep component 'instrumented-component)
                                   (class-name (find-class (output-file-type component))))
                                  ;; other types get their class name.
                                  (t
@@ -346,7 +347,11 @@ their :additional-dependencies."
                                                                 1-dependencies)))
                                          ,@(additional-dependencies* component))
                                      #'string<))
-                                :test #'equal)))))
+                                :test #'equal)
+
+                               ;; component initargs
+                               (and (typep component 'instrumented-cl-source-file)
+                                    (additional-initargs component))))))
           (format stream "~&)~%"))))))
 
 
