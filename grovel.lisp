@@ -39,6 +39,21 @@
                  if (symbolp cdr)
                    do (signal-for-symbol cdr))))))
 
+(defun signal-possible-special-variable-use-in-form (form)
+  (labels ((signal-for-symbol (sym)
+             (let ((sym-name (symbol-name sym)))
+               (when (and (> (length sym-name) 0)
+                          (eql #\* (elt sym-name 0))
+                          (eql #\* (elt sym-name (1- (length sym-name)))))
+                 (signal-macroexpansion *user-hook* sym 'defvar)))))
+    (cond ((symbolp form)
+           (signal-for-symbol form))
+          ((consp form)
+           (loop for (car . cdr) on form
+                 do (signal-possible-special-variable-use-in-form car)
+                 if (symbolp cdr)
+                   do (signal-for-symbol cdr))))))
+
 (defun signal-symbol-macroexpansion (name expansion)
   (signal-macroexpansion *user-hook* name 'define-symbol-macro)
   expansion)
@@ -103,6 +118,8 @@ keeping declarations intact."
        (let ((method-combination (second (assoc :method-combination (nthcdr 3 form)))))
          (when method-combination
            (signal-macroexpansion *user-hook* method-combination 'define-method-combination))))
+      ((defvar defparameter)
+       (signal-macroexpansion *provider-hook* (second form) 'defvar))
       ((defmethod)
        (signal-macroexpansion *user-hook* (second form) 'defgeneric)
        ;; walk arg list and signal use of specialized-on
@@ -199,6 +216,7 @@ keeping declarations intact."
                       env)))))
       (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
   (signal-symbol-use-in-form form)
+  (signal-possible-special-variable-use-in-form form) ; XXX: heuristic, doesn't catch everything
   (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
     expanded))
 
@@ -206,15 +224,18 @@ keeping declarations intact."
 ;;; The actual groveling part.
 
 (defun enough-component-spec (c &optional pn-p)
-  (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
-             (make-pathname :name (asdf:component-name c) :type "lisp"))
-      (format nil "~S" (asdf:component-name c))
-      (let ((pn (parse-namestring (enough-namestring (asdf:component-pathname c)))))
-        (format nil "~S~:[~; :pathname #.(make-pathname :directory '~S :name ~S :type \"lisp\")~%~]"
-                (enough-namestring (make-pathname :type nil :defaults (asdf:component-pathname c)))
-                pn-p
-                (pathname-directory pn)
-                (pathname-name pn)))))
+  (flet ((strip/ (name)
+           (subseq name (or (position #\/ name :from-end t) 0))))
+    (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
+               (make-pathname :name (asdf:component-name c) :type "lisp"))
+        (format nil "~S" (asdf:component-name c))
+        (let ((pn (parse-namestring (enough-namestring (asdf:component-pathname c)))))
+          (format nil "~S~:[~; :pathname #.(make-pathname :directory '~S :name ~S :type \"lisp\")~%~]"
+                  (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
+                                                    :type nil :defaults (asdf:component-pathname c)))
+                  pn-p
+                  (pathname-directory pn)
+                  (pathname-name pn))))))
 
 (defun system-file-components (system)
   "Flatten the tree of modules/components into a list that
@@ -281,7 +302,11 @@ their :additional-dependencies."
                           (some #'interestingp to-components))
                  (setf (gethash from dependencies)
                        (remove-duplicates (append (remove-if-not #'interestingp to-components)
-                                                  (gethash from dependencies)))))))
+                                                  (gethash from dependencies))))))
+             (coerce-name (maybe-class)
+               (if (typep maybe-class 'standard-class)
+                   (class-name maybe-class)
+                   maybe-class)))
       (let ((*provider-hook*
              (lambda (name type component)
                (pushnew component (gethash (list type name) providers))))
@@ -311,7 +336,7 @@ their :additional-dependencies."
             (loop for component in (system-file-components system)
                   for 1-dependencies = (gethash component dependencies)
                   do (let ((*package* (find-package :keyword)))
-                       (format stream "~& (~S ~A~%  :depends-on ~:A~@[~%  ~{ ~S~}~])~%"
+                       (format stream "~& (~S ~A~@[~%  :depends-on ~:A~]~@[~%  ~{ ~S~}~])~%"
                                ;; component class:
                                (cond
                                  ;; standard instrumented component with no output file type, and
@@ -322,8 +347,9 @@ their :additional-dependencies."
                                  ((and (not (typep component 'instrumented-cl-source-file))
                                        (eql (class-of component)
                                             (find-class (or
-                                                         (asdf::module-default-component-class
-                                                          (asdf:component-parent component))
+                                                         (coerce-name
+                                                          (asdf::module-default-component-class
+                                                           (asdf:component-parent component)))
                                                          'asdf:cl-source-file))))
                                   :file)
                                  ;; instrumented components with output file types emit

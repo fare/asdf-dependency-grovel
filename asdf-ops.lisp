@@ -71,18 +71,27 @@ to the base of the system."
 
 (defmethod asdf:output-files ((op dependency-op) (c component-file))
   (list
+   ;; XXX: base-pathname?
    (merge-pathnames (slot-value c 'output-file)
                     (asdf:component-pathname c))))
 
 (defmethod asdf:input-files ((op dependency-op) (c component-file))
+  ;; XXX: base-pathname?
   (asdf:component-pathname c))
 
 (defmethod asdf:operation-done-p ((op dependency-op) (comp component-file))
   nil)
 
+(defvar *default-component-class* (find-class 'asdf:cl-source-file))
+
+;;; XXX: nasty hack.
+;;; Necessary to support asd files that weren't rewritten to use
+;;; instrumented-module/instrumented-cl-source-file classes.
+(defmethod asdf::module-default-component-class :around ((c asdf:module))
+  *default-component-class*)
+
 (defmethod asdf:perform ((op dependency-op) (c component-file))
-  (with-open-file (component-stream (merge-pathnames (slot-value c 'output-file)
-                                                     (asdf:component-pathname c))
+  (with-open-file (component-stream (car (asdf:output-files op c))
                                     :direction :output
                                     :if-does-not-exist :create
                                     :if-exists :supersede)
@@ -91,25 +100,23 @@ to the base of the system."
                              additional-dependencies
                              base-pathname) c
        ;; we need none of the systems to be loaded.
-       (let ((*system-definition-search-functions* nil))
-         (flet ((system-not-loaded-p (system)
-                  (handler-case (progn (asdf:find-system system)
-                                       nil)
-                    (asdf:missing-component () t))))
-           (when (every #'system-not-loaded-p merge-systems)
-             (error "Systems ~A are already loaded."
-                    (remove-if-not #'system-not-loaded-p merge-systems)))))
-       (let ((asdf::*default-component-class* 'instrumented-cl-source-file))
-         (grovel-dependencies load-system component-stream
-                              :interesting (mapcar #'asdf:find-system merge-systems)
-                              :cull-redundant cull-redundant
-                              :verbose verbose
-                              :base-pathname
-                              (or
-                               (and (slot-boundp c 'base-pathname)
-                                    base-pathname)
-                               (truename
-                                (make-pathname :name nil
-                                               :type nil
-                                               :defaults
-                                               (asdf:component-pathname c)))))))))
+       (flet ((system-not-loaded-p (system)
+                (null
+                 (gethash (asdf::coerce-name system) asdf::*defined-systems*))))
+         (unless (every #'system-not-loaded-p merge-systems)
+           (error "Systems ~A are already loaded."
+                  (remove-if #'system-not-loaded-p merge-systems))))
+       (grovel-dependencies load-system component-stream
+                            :interesting (let ((*default-component-class* (find-class 'instrumented-cl-source-file)))
+                                           (mapcar #'asdf:find-system merge-systems))
+                            :cull-redundant cull-redundant
+                            :verbose verbose
+                            :base-pathname
+                            (or
+                             (and (slot-boundp c 'base-pathname)
+                                  base-pathname)
+                             (truename
+                              (make-pathname :name nil
+                                             :type nil
+                                             :defaults
+                                             (asdf:component-pathname c))))))))
