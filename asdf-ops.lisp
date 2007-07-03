@@ -45,11 +45,15 @@ to the base of the system."
          output-file))))
 
 (defmethod asdf:perform :around ((op asdf:load-op) (comp instrumented-cl-source-file))
-  (let ((*current-component* comp))
+  (let ((*current-component* comp)
+        (file (namestring (merge-pathnames (asdf:component-pathname comp)))))
+    (signal-macroexpansion *user-hook* file 'file-component)
     (call-next-method)))
 
 (defmethod asdf:perform :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
-  (let* ((*current-component* comp))
+  (let* ((*current-component* comp)
+         (file (namestring (merge-pathnames (asdf:component-pathname comp)))))
+    (signal-macroexpansion *user-hook* file 'file-component)
     (call-next-method)))
 
 ;;; TODO for asdf-component/op:

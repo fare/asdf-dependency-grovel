@@ -160,7 +160,10 @@ keeping declarations intact."
        (loop for superclass in (third form)
              do (signal-macroexpansion *user-hook* superclass (first form))))
       ((defstruct)
-       (signal-macroexpansion *provider-hook* (second form) 'defclass))
+       (let ((name (etypecase (second form)
+                     (symbol (second form))
+                     (cons (first (second form))))))
+         (signal-macroexpansion *provider-hook* name 'defclass)))
       ((defpackage)
        (signal-macroexpansion *provider-hook*
                               (canonical-package-name (second form))
@@ -203,7 +206,7 @@ keeping declarations intact."
            (let ((*macroexpand-hook* *old-macroexpand-hook*))
              (funcall *old-macroexpand-hook* fun
                       `(,def ,name (signal-symbol-macroexpansion ',name ,expansion))
-                      env)))))                  
+                      env)))))
       ((defun)
        (destructuring-bind (defun name arg-list &rest maybe-body) form
          (signal-macroexpansion *provider-hook* name (first form))
@@ -214,12 +217,29 @@ keeping declarations intact."
                          ,@(instrument-defun-body maybe-body
                                                   `(signal-macroexpansion *user-hook* ',name 'defun)))
                       env)))))
+      ((with-open-file) ; XXX: heuristic, doesn't catch every file
+                        ; creation either.
+       (destructuring-bind (stream pathname &key (direction :input)
+                                   &allow-other-keys)
+           (second form)
+         (declare (ignore stream))
+         (when (eql direction :output)
+           (let ((*macroexpand-hook* *old-macroexpand-hook*))
+             (return-from instrumenting-macroexpand-hook
+               (funcall *old-macroexpand-hook* fun
+                        `(with-open-file ,(second form)
+                           ,@(instrument-defun-body
+                              (cddr form)
+                              `(signal-macroexpansion *provider-hook*
+                                                      (namestring (merge-pathnames ,pathname))
+                                                      'file-component)))
+                        env))))))
       (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
   (signal-symbol-use-in-form form)
-  (signal-possible-special-variable-use-in-form form) ; XXX: heuristic, doesn't catch everything
+  ;; XXX: heuristic, doesn't catch everything:
+  (signal-possible-special-variable-use-in-form form) 
   (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
     expanded))
-
 
 ;;; The actual groveling part.
 
