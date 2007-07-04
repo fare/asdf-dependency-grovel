@@ -287,7 +287,8 @@ their :additional-dependencies."
           (map-over-instrumented-component-and-parents component 'additional-dependencies)))
 
 (defun overridden-dependencies* (component)
-  (map-over-instrumented-component-and-parents component 'overridden-dependencies))
+  (mapcar #'dwim-stringify-component-spec
+          (map-over-instrumented-component-and-parents component 'overridden-dependencies)))
 
 (defun maybe-translated-component-name (component &key include-pathname)
   
