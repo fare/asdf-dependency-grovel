@@ -65,7 +65,14 @@ to the base of the system."
       (cull-redundant :initarg :cull-redundant :initform nil)
       (verbose :initarg :verbose :initform t)
       (output-file :initarg :output-file)
-      (base-pathname :initarg :base-pathname)))
+      (base-pathname :initarg :base-pathname)
+      (additional-initargs :initarg :additional-initargs :initform nil
+                           :documentation
+                           #.(format nil "A list of mappings from ~
+                           components in systems to additional initargs that the ~
+                           instrumented components should receive. E.g.:
+                           ((:foo-system (\"module\" \"component-name\") :additional-dependencies ())
+                            (:foo-system (\"component2\") :data-files ())"))))
 
 (defclass dependency-op (asdf:operation)
      ())
@@ -101,8 +108,7 @@ to the base of the system."
                                     :if-exists :supersede)
     (with-slots (load-system merge-systems
                              component-name-translation cull-redundant verbose
-                             additional-dependencies
-                             base-pathname) c
+                             additional-initargs base-pathname) c
        ;; we need none of the systems to be loaded.
        (flet ((system-not-loaded-p (system)
                 (null
@@ -110,9 +116,28 @@ to the base of the system."
          (unless (every #'system-not-loaded-p merge-systems)
            (error "Systems ~A are already loaded."
                   (remove-if #'system-not-loaded-p merge-systems))))
+
+       (let ((*default-component-class* (find-class 'instrumented-cl-source-file)))
+         (mapc #'asdf:find-system merge-systems))
+
+       (labels ((find-component-in-module (module components)
+                  (if (null (rest components))
+                      (asdf:find-component module (first components))
+                      (find-component-in-module (asdf:find-component module (first components))
+                                                (rest components))))
+                (add-initargs (system compspec args)
+                  (apply #'reinitialize-instance (find-component-in-module (asdf:find-system system)
+                                                                           compspec)
+                         args)))
+         (loop for (system compspec . initargs) in additional-initargs
+               do (assert (member (asdf::coerce-name system) merge-systems :key #'asdf::coerce-name
+                                  :test #'equal)
+                          ()
+                          "Component translation in System ~A which is not a member of the ~
+                           systems to merge." system)
+               do (add-initargs system compspec initargs)))
        (grovel-dependencies load-system component-stream
-                            :interesting (let ((*default-component-class* (find-class 'instrumented-cl-source-file)))
-                                           (mapcar #'asdf:find-system merge-systems))
+                            :interesting (mapcar #'asdf:find-system merge-systems)
                             :cull-redundant cull-redundant
                             :verbose verbose
                             :base-pathname

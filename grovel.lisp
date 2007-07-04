@@ -3,14 +3,15 @@
 
 ;;; TODO:
 ;; * handle more def*:
-;;  * defvar & defparameter - fails because of special declarations.
-;;    if it worked, it would be the same as defconstant.
+;;  * defvar & defparameter - works for symbols that are named
+;;    *something* and are used /somewhere/ in a macro in the dependent
+;;    file.
 ;;  * define-compiler-macro - argh. seriously, no idea. if you use
 ;;    this at compile/load time, sorry.
 ;;  * deftype - we can signal that it was provided, but have to walk
 ;;    declarations in def* and generally almost /everwhere/. not fun.
 
-;; * more package games: :use, :import-from, :shadow?
+;; * more package games: :use, :import-from, :shadow
 
 (cl:in-package #:asdf-dependency-grovel)
 
@@ -217,8 +218,7 @@ keeping declarations intact."
                          ,@(instrument-defun-body maybe-body
                                                   `(signal-macroexpansion *user-hook* ',name 'defun)))
                       env)))))
-      ((with-open-file) ; XXX: heuristic, doesn't catch every file
-                        ; creation either.
+      ((with-open-file) ; XXX: heuristic, doesn't catch every file creation.
        (destructuring-bind (stream pathname &key (direction :input)
                                    &allow-other-keys)
            (second form)
@@ -273,10 +273,18 @@ contains only the non-module components."
                   (slot-boundp c slot-name))
           append (slot-value c slot-name)))
 
+(defun dwim-stringify-component-spec (component-spec)
+  (case (char component-spec 0)
+    ((#\# #\") ; is a subform, insert as-is
+     component-spec)
+    (otherwise ; should be a string, make it one.
+     (concatenate 'string (string #\") component-spec (string #\")))))
+
 (defun additional-dependencies* (component)
   "Walk the tree up through all parent components and collect
 their :additional-dependencies."
-  (map-over-instrumented-component-and-parents component 'additional-dependencies))
+  (mapcar #'dwim-stringify-component-spec
+          (map-over-instrumented-component-and-parents component 'additional-dependencies)))
 
 (defun overridden-dependencies* (component)
   (map-over-instrumented-component-and-parents component 'overridden-dependencies))
