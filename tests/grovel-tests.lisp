@@ -36,8 +36,11 @@
                :has depends-on)))))
 
 (load "../asdf-dependency-grovel.asd")
-(load "test-serial.asd")
-(asdf:oos 'asdf-dependency-grovel:dependency-op :asdf-dependency-grovel-test/generator)
+;;(load "test-serial.asd")
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (asdf:oos 'asdf:load-op :asdf-dependency-grovel))
+(push #p"." asdf:*central-registry*)
+(asdf:oos 'asdf-dependency-grovel:dependency-op :test-serial)
 
 (defun test-result ()
   (with-open-file (f "groveled-components.lisp" :direction :input)

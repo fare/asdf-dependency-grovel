@@ -11,7 +11,7 @@
 
 (in-package :asdf-dependency-grovel-test.system)
 
-(defsystem :asdf-dependency-grovel-test/generator
+(defsystem :test-serial
   :components ((component-file :asdf-dependency-grovel-test/serial
                                :load-system :asdf-dependency-grovel-test/serial
                                :merge-systems (:asdf-dependency-grovel-test/serial)

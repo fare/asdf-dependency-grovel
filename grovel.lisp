@@ -65,7 +65,7 @@
      (setf ,expression ,new-value)))
 
 (defmacro symbol-macroify (operator name &rest args &environment env)
-  (let ((new-name (gentemp)))
+  (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-" operator))))
     `(progn
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
@@ -125,8 +125,7 @@ keeping declarations intact."
        (signal-macroexpansion *user-hook* (second form) 'defgeneric)
        ;; walk arg list and signal use of specialized-on
        ;; classes, and instrument function body.
-       (let* ((*macroexpand-hook* *old-macroexpand-hook*)
-              (name (second form))
+       (let* ((name (second form))
               (new-expansion
                `(defmethod ,name
                     ,@(loop for (elt . body) on (nthcdr 2 form)
@@ -300,21 +299,52 @@ their :additional-dependencies."
                    (slot-value component 'translated-pathname)))
       (enough-component-spec component include-pathname)))
 
+(defclass grovel-state ()
+     ((dir-suffix :initform (get-universal-time)
+                  :initarg :dir-suffix
+                  :reader dir-suffix)
+      (providers :initform (make-hash-table :test #'equal)
+                 :initarg :providers
+                 :reader providers)
+      (dependencies :initform (make-hash-table :test #'eql)
+                    :initarg :dependencies
+                    :reader dependencies)
+      (symbol-translations :initform  (make-hash-table)
+                           :initarg :symbol-translations
+                           :reader symbol-translations)))
+
+(defun simple-copy-hash-table (hash-table &key (test #'eql) &aux (return (make-hash-table :test test)))
+  (loop for key being the hash-keys in hash-table using (hash-value value)
+        do (setf (gethash key return) value))
+  return)
+
+(defun copy-state (state)
+  (make-instance 'grovel-state
+     :dir-suffix (dir-suffix state)
+     :providers (simple-copy-hash-table (providers state) :test #'equal)
+     :dependencies (simple-copy-hash-table (dependencies state) :test #'eql)
+     :symbol-translations (simple-copy-hash-table (symbol-translations state)
+                                                  :test #'eql)))
+
 (defun grovel-dependencies (system stream &key interesting verbose cull-redundant
                             (base-pathname (truename
                                             (make-pathname
                                              :type nil
                                              :name nil
-                                             :defaults (asdf:component-pathname system)))))
-  (let* ((system (asdf:find-system system))
-         (providers (make-hash-table :test #'equal))
-         (dependencies (make-hash-table :test #'eql))
+                                             :defaults (asdf:component-pathname system))))
+                            initial-state)
+  (let* ((state (if initial-state
+                    (copy-state initial-state)
+                    (make-instance 'grovel-state)))
+         (system (asdf:find-system system))
+         (providers (providers state))
+         (dependencies (dependencies state))
 
          (*old-macroexpand-hook* *macroexpand-hook*)
          (*macroexpand-hook* #'instrumenting-macroexpand-hook)
-         (*symbol-translations* (make-hash-table))
+         (*symbol-translations* (symbol-translations state))
          (*default-pathname-defaults* base-pathname)
-         (*grovel-dir-suffix* (get-universal-time)))
+         (*grovel-dir-suffix* (dir-suffix state)))
     (labels ((interestingp (component)
                (member (asdf:component-system component) interesting :test #'eql))
              (redundantp (from to)
@@ -407,6 +437,7 @@ their :additional-dependencies."
                                ;; component initargs
                                (and (typep component 'instrumented-cl-source-file)
                                     (additional-initargs component))))))
-          (format stream "~&)~%"))))))
+          (format stream "~&)~%"))))
+    state))
 
 

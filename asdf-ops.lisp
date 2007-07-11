@@ -66,6 +66,7 @@ to the base of the system."
       (verbose :initarg :verbose :initform t)
       (output-file :initarg :output-file)
       (base-pathname :initarg :base-pathname)
+      (inherit-from :initarg :inherit-from :initform nil)
       (additional-initargs :initarg :additional-initargs :initform nil
                            :documentation
                            #.(format nil "A list of mappings from ~
@@ -74,8 +75,30 @@ to the base of the system."
                            ((:foo-system (\"module\" \"component-name\") :additional-dependencies ())
                             (:foo-system (\"component2\") :data-files ())"))))
 
+(defun ancestor-component (component)
+  (asdf:find-component (asdf:component-parent component)
+                       (slot-value component 'inherit-from)))
+
+(defun inherited-slot-values (slot-name component)
+  (when (slot-value component 'inherit-from)
+    (let ((ancestor (ancestor-component component)))
+      (append (slot-value ancestor slot-name)
+              (inherited-slot-values slot-name ancestor)))))
+
 (defclass dependency-op (asdf:operation)
-     ())
+     ((states :initform (make-hash-table :test #'equal)
+              :reader states-of)))
+
+(defmethod asdf:component-depends-on ((op dependency-op) (c component-file))
+  (with-slots (inherit-from) c
+     (when inherit-from
+       `((dependency-op ,inherit-from)))))
+
+(defun state-of (op component)
+  (gethash component (states-of op)))
+
+(defun (setf state-of) (new-val op component)
+  (setf (gethash component (states-of op)) new-val))
 
 (defmethod asdf:source-file-type ((c component-file) (s asdf:module))
   "asd")
@@ -106,20 +129,19 @@ to the base of the system."
                                     :direction :output
                                     :if-does-not-exist :create
                                     :if-exists :supersede)
-    (with-slots (load-system merge-systems
-                             component-name-translation cull-redundant verbose
-                             additional-initargs base-pathname) c
-       ;; we need none of the systems to be loaded.
+    (with-slots (
+                 load-system merge-systems
+                 component-name-translation cull-redundant verbose
+                 additional-initargs base-pathname) c
+       ;; we require that none of the systems be loaded.
        (flet ((system-not-loaded-p (system)
                 (null
                  (gethash (asdf::coerce-name system) asdf::*defined-systems*))))
          (unless (every #'system-not-loaded-p merge-systems)
-           (error "Systems ~A are already loaded."
-                  (remove-if #'system-not-loaded-p merge-systems))))
-
+           (cerror "Continue anyway." "Systems ~A are already loaded."
+                   (remove-if #'system-not-loaded-p merge-systems))))
        (let ((*default-component-class* (find-class 'instrumented-cl-source-file)))
          (mapc #'asdf:find-system merge-systems))
-
        (labels ((find-component-in-module (module components)
                   (if (null (rest components))
                       (asdf:find-component module (first components))
@@ -136,16 +158,22 @@ to the base of the system."
                           "Component translation in System ~A which is not a member of the ~
                            systems to merge." system)
                do (add-initargs system compspec initargs)))
-       (grovel-dependencies load-system component-stream
-                            :interesting (mapcar #'asdf:find-system merge-systems)
-                            :cull-redundant cull-redundant
-                            :verbose verbose
-                            :base-pathname
-                            (or
-                             (and (slot-boundp c 'base-pathname)
-                                  base-pathname)
-                             (truename
-                              (make-pathname :name nil
-                                             :type nil
-                                             :defaults
-                                             (asdf:component-pathname c))))))))
+       
+       (let ((merge-systems (append merge-systems (inherited-slot-values 'merge-systems c)))
+             (initial-state (when (ancestor-component c)
+                              (state-of op (ancestor-component c)))))
+         (setf (state-of op c)
+               (grovel-dependencies load-system component-stream
+                                    :interesting (mapcar #'asdf:find-system merge-systems)
+                                    :cull-redundant cull-redundant
+                                    :verbose verbose
+                                    :initial-state initial-state
+                                    :base-pathname
+                                    (or
+                                     (and (slot-boundp c 'base-pathname)
+                                          base-pathname)
+                                     (truename
+                                      (make-pathname :name nil
+                                                     :type nil
+                                                     :defaults
+                                                     (asdf:component-pathname c))))))))))
