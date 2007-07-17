@@ -46,15 +46,19 @@ to the base of the system."
 
 (defmethod asdf:perform :around ((op asdf:load-op) (comp instrumented-cl-source-file))
   (let ((*current-component* comp)
-        (file (namestring (merge-pathnames (asdf:component-pathname comp)))))
+        (file (namestring (merge-pathnames (asdf:component-pathname comp))))
+        (*readtable* (make-instrumented-readtable)))
     (signal-macroexpansion *user-hook* file 'file-component)
-    (call-next-method)))
+    (noticing-*feature*-changes
+     (call-next-method))))
 
 (defmethod asdf:perform :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
   (let* ((*current-component* comp)
-         (file (namestring (merge-pathnames (asdf:component-pathname comp)))))
+         (file (namestring (merge-pathnames (asdf:component-pathname comp))))
+         (*readtable* (make-instrumented-readtable)))
     (signal-macroexpansion *user-hook* file 'file-component)
-    (call-next-method)))
+    (noticing-*feature*-changes
+     (call-next-method))))
 
 ;;; TODO for asdf-component/op:
 ;;; * ignore component-name. I have no idea what it /should/ indicate.

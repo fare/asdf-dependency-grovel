@@ -13,6 +13,10 @@
 (defvar *symbol-translations* nil
   "Hash table containing patched-symbol -> ansi-symbol translations")
 
+(defvar *suspected-variables* nil
+  "Hash table containing the symbols that should be treated as if they
+were variables when used in forms.")
+
 (defvar *grovel-dir-suffix* nil
   "Bound to a value that is unique once per operating on each
   dependency-groveling system.")

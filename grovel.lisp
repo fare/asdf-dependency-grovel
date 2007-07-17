@@ -42,11 +42,8 @@
 
 (defun signal-possible-special-variable-use-in-form (form)
   (labels ((signal-for-symbol (sym)
-             (let ((sym-name (symbol-name sym)))
-               (when (and (> (length sym-name) 0)
-                          (eql #\* (elt sym-name 0))
-                          (eql #\* (elt sym-name (1- (length sym-name)))))
-                 (signal-macroexpansion *user-hook* sym 'defvar)))))
+             (when (gethash sym *suspected-variables*)
+               (signal-macroexpansion *user-hook* sym 'defvar))))
     (cond ((symbolp form)
            (signal-for-symbol form))
           ((consp form)
@@ -103,6 +100,59 @@ keeping declarations intact."
               and do (loop-finish)
             collect elt)))
 
+(defmacro noticing-*feature*-changes (&rest body)
+  ;; naive implementation, doesn't really deal with removed features
+  (let ((old-features (gensym))
+        (new-feature (gensym))
+        (removed-feature (gensym)))
+    `(let ((,old-features (copy-list *features*)))
+       (prog1 (progn ,@body)
+              (dolist (,new-feature (set-difference *features* ,old-features))
+                (signal-macroexpansion *provider-hook* ,new-feature 'feature))
+              (dolist (,removed-feature (set-difference ,old-features *features*))
+                (signal-macroexpansion *provider-hook* ,new-feature 'removed-feature))))))
+
+
+(labels ((signal-feature (presentp feature)
+           (signal-macroexpansion *user-hook* feature
+                                  (if presentp 'feature 'removed-feature)))
+         (featurep (x)
+           (if (consp x)
+               (case (car x)
+                 ((:not not)
+                  (if (cddr x)
+                      (error "too many subexpressions in feature expression: ~S" x)
+                      (not (featurep (cadr x)))))
+                 ((:and and) (every #'featurep (cdr x)))
+                 ((:or or) (some #'featurep (cdr x)))
+                 (t
+                  (error "unknown operator in feature expression: ~S." x)))
+               (let ((feature-presentp (not (null (member x *features*)))))
+                 (signal-feature feature-presentp x)
+                 feature-presentp)))
+           (guts (stream not-p)
+             (unless (if (let ((*package* (find-package :keyword))
+                               (*read-suppress* nil))
+                           (featurep (read stream t nil t)))
+                         (not not-p)
+                         not-p)
+               (let ((*read-suppress* t))
+                 (read stream t nil t)))
+             (values)))
+    (defun instrumented-sharp+ (stream subchar numarg)
+      (declare (ignore numarg subchar))
+      (guts stream nil))
+    (defun instrumented-sharp- (stream subchar numarg)
+      (declare (ignore numarg subchar))
+      (guts stream t)))
+
+(defun make-instrumented-readtable (&optional (readtable *readtable*))
+  (setf readtable (copy-readtable readtable))
+  (set-dispatch-macro-character #\# #\+ #'instrumented-sharp+ readtable)
+  (set-dispatch-macro-character #\# #\- #'instrumented-sharp- readtable)
+  ;; TODO: #.
+  readtable)
+
 (defun instrumenting-macroexpand-hook (fun form env)
   (when (listp form)
     (case (unalias-symbol (first form))
@@ -120,7 +170,8 @@ keeping declarations intact."
          (when method-combination
            (signal-macroexpansion *user-hook* method-combination 'define-method-combination))))
       ((defvar defparameter)
-       (signal-macroexpansion *provider-hook* (second form) 'defvar))
+       (signal-macroexpansion *provider-hook* (second form) 'defvar)
+       (setf (gethash (second form) *suspected-variables*) t))
       ((defmethod)
        (signal-macroexpansion *user-hook* (second form) 'defgeneric)
        ;; walk arg list and signal use of specialized-on
@@ -309,6 +360,9 @@ their :additional-dependencies."
       (dependencies :initform (make-hash-table :test #'eql)
                     :initarg :dependencies
                     :reader dependencies)
+      (suspected-variables :initform (make-hash-table :test #'eql)
+                           :initarg :suspected-variables
+                           :reader suspected-variables)
       (symbol-translations :initform  (make-hash-table)
                            :initarg :symbol-translations
                            :reader symbol-translations)))
@@ -323,6 +377,7 @@ their :additional-dependencies."
      :dir-suffix (dir-suffix state)
      :providers (simple-copy-hash-table (providers state) :test #'equal)
      :dependencies (simple-copy-hash-table (dependencies state) :test #'eql)
+     :suspected-variables (simple-copy-hash-table (suspected-variables state) :test #'eql)
      :symbol-translations (simple-copy-hash-table (symbol-translations state)
                                                   :test #'eql)))
 
@@ -344,7 +399,8 @@ their :additional-dependencies."
          (*macroexpand-hook* #'instrumenting-macroexpand-hook)
          (*symbol-translations* (symbol-translations state))
          (*default-pathname-defaults* base-pathname)
-         (*grovel-dir-suffix* (dir-suffix state)))
+         (*grovel-dir-suffix* (dir-suffix state))
+         (*suspected-variables* (suspected-variables state)))
     (labels ((interestingp (component)
                (member (asdf:component-system component) interesting :test #'eql))
              (redundantp (from to)
