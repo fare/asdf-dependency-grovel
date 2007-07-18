@@ -64,7 +64,7 @@ to the base of the system."
 ;;; * ignore component-name. I have no idea what it /should/ indicate.
 
 (defclass component-file (asdf:source-file)
-     ((load-system :initarg :load-system)
+     ((load-system :initarg :load-systems)
       (merge-systems :initarg :merge-systems)
       (cull-redundant :initarg :cull-redundant :initform nil)
       (verbose :initarg :verbose :initform t)
@@ -152,9 +152,14 @@ to the base of the system."
                       (find-component-in-module (asdf:find-component module (first components))
                                                 (rest components))))
                 (add-initargs (system compspec args)
-                  (apply #'reinitialize-instance (find-component-in-module (asdf:find-system system)
-                                                                           compspec)
-                         args)))
+                  (let ((component (find-component-in-module
+                                    (asdf:find-system system)
+                                    compspec)))
+                    (assert component (component)
+                            "Component spec ~S in ~S didn't find a component."
+                            compspec system)
+                    (apply #'reinitialize-instance component
+                           args))))
          (loop for (system compspec . initargs) in additional-initargs
                do (assert (member (asdf::coerce-name system) merge-systems :key #'asdf::coerce-name
                                   :test #'equal)
@@ -181,3 +186,39 @@ to the base of the system."
                                                      :type nil
                                                      :defaults
                                                      (asdf:component-pathname c))))))))))
+
+;;; Reading the component list back into asdf defsystems
+
+
+(macrolet
+    ((define-comp-file-reader (fname (1-system-var return-var)
+                                     &body 1-system-body)
+         
+         (let ((system-name (gensym))
+               (system-names (gensym))
+               (done-systems (gensym))
+               (systems (gensym)))
+           `(defun ,fname (pathname &rest ,system-names)
+              (with-open-file (f pathname :direction :input)
+                (let ((,systems (read f))
+                      ,done-systems
+                      ,return-var)
+                  (labels ((do-1-system (,system-name)
+                             (unless (position ,system-name ,done-systems
+                                               :test #'string-equal)
+                               (let ((,1-system-var (assoc ,system-name ,systems
+                                                           :test #'string-equal)))
+                                 (progn ,@1-system-body)
+                                 (push ,system-name ,done-systems)
+                                 (getf (cdr ,1-system-var) :depends-on)))))
+                    (loop while ,system-names
+                          for ,system-name = (pop ,system-names)
+                          do (setf ,system-names (append ,system-names
+                                                        (do-1-system ,system-name))))
+                    ,return-var)))))))
+  (define-comp-file-reader read-component-file (system component-list)
+    (setf component-list 
+          (append component-list (getf (cdr system) :components))))
+  (define-comp-file-reader systems-in-configuration (system component-names)
+    (when system
+      (push (first system) component-names))))

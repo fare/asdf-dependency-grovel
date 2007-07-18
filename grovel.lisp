@@ -110,7 +110,7 @@ keeping declarations intact."
               (dolist (,new-feature (set-difference *features* ,old-features))
                 (signal-macroexpansion *provider-hook* ,new-feature 'feature))
               (dolist (,removed-feature (set-difference ,old-features *features*))
-                (signal-macroexpansion *provider-hook* ,new-feature 'removed-feature))))))
+                (signal-macroexpansion *provider-hook* ,removed-feature 'removed-feature))))))
 
 
 (labels ((signal-feature (presentp feature)
@@ -155,139 +155,145 @@ keeping declarations intact."
 
 (defun instrumenting-macroexpand-hook (fun form env)
   (when (listp form)
-    (case (unalias-symbol (first form))
-      ((defmacro define-method-combination)
-       (signal-macroexpansion *provider-hook* (second form) (first form)))
-      ((defsetf define-setf-expander)
-       (signal-macroexpansion *provider-hook* (second form) 'setf))
-      ((setf)
-       (when (listp (second form))
-         (signal-macroexpansion *user-hook* (first (second form)) 'setf)))
+    (unwind-protect
+        (case (unalias-symbol (first form))
+          ((defmacro define-method-combination)
+           (signal-macroexpansion *provider-hook* (second form) (first form)))
+          ((defsetf define-setf-expander)
+           (signal-macroexpansion *provider-hook* (second form) 'setf))
+          ((setf)
+           (when (listp (second form))
+             (signal-macroexpansion *user-hook* (first (second form)) 'setf)))
                   
-      ((defgeneric)
-       (signal-macroexpansion *provider-hook* (second form) 'defgeneric)
-       (let ((method-combination (second (assoc :method-combination (nthcdr 3 form)))))
-         (when method-combination
-           (signal-macroexpansion *user-hook* method-combination 'define-method-combination))))
-      ((defvar defparameter)
-       (signal-macroexpansion *provider-hook* (second form) 'defvar)
-       (setf (gethash (second form) *suspected-variables*) t))
-      ((defmethod)
-       (signal-macroexpansion *user-hook* (second form) 'defgeneric)
-       ;; walk arg list and signal use of specialized-on
-       ;; classes, and instrument function body.
-       (let* ((name (second form))
-              (new-expansion
-               `(defmethod ,name
-                    ,@(loop for (elt . body) on (nthcdr 2 form)
-                            if (not (listp elt))
-                              collect elt into modifiers
-                            else
-                              do (signal-macroexpansion *provider-hook* `(,name ,@modifiers ,elt) 'defmethod)
-                              and do
-                                (loop for arg in elt
-                                      when (and (listp arg)
-                                                (symbolp (second arg)))
-                                        do (signal-macroexpansion *user-hook* (second arg) 'defclass))
-                              and collect elt into modifiers
-                              and collect elt
-                              and append (instrument-defun-body body
-                                                    `(signal-macroexpansion
-                                                            *user-hook*
-                                                            '(,name ,@modifiers)
-                                                            'defmethod))
-                              and do (loop-finish)
-                            collect elt))))
-         ;; (format *debug-io* "~&~S becomes:~&~S~%~%" form new-expansion)
-         (return-from instrumenting-macroexpand-hook
-           (funcall *old-macroexpand-hook* fun new-expansion env))))
-      ((defclass define-condition)
-       (signal-macroexpansion *provider-hook* (second form) (first form))
-       ;; signal use of direct
-       ;; superclasses/superconditions. Note that we
-       ;; declare a dependency only if the direct
-       ;; superclass is already defined through the
-       ;; current system definition.
-       (loop for superclass in (third form)
-             do (signal-macroexpansion *user-hook* superclass (first form))))
-      ((defstruct)
-       (let ((name (etypecase (second form)
-                     (symbol (second form))
-                     (cons (first (second form))))))
-         (signal-macroexpansion *provider-hook* name 'defclass)))
-      ((defpackage)
-       (signal-macroexpansion *provider-hook*
-                              (canonical-package-name (second form))
-                              'defpackage)
-       (labels ((clause-contents (clause-name &optional (filter #'rest))
-                  (mapcar #'canonical-package-name
-                          (reduce #'append
-                                  (mapcar filter
-                                          (remove-if-not (lambda (clause)
-                                                           (eql clause-name
-                                                                (first clause)))
-                                                         (nthcdr 2 form))))))
-                (clause-second-element (clause)
-                  (list (second clause))))
-         (loop for nickname in (clause-contents :nickname)
-               do (signal-macroexpansion *provider-hook* nickname 'defpackage))
-         ;; signal :uses of packages
-         (loop for use in (append (clause-contents :use)
-                                  (clause-contents :import-from
-                                         #'clause-second-element)
-                                  (clause-contents :shadowing-import-from
-                                         #'clause-second-element))
-               do (signal-macroexpansion *user-hook*
-                                         (canonical-package-name use)
-                         'defpackage))))
-      ((in-package)
-       (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
-
-      ((defconstant)       
-       (signal-macroexpansion *provider-hook* (second form) (first form))
-       (return-from instrumenting-macroexpand-hook
-         (let* ((*macroexpand-hook* *old-macroexpand-hook*)
-                (expansion (funcall *old-macroexpand-hook* (macro-function 'symbol-macroify)
-                                    `(symbol-macroify ,@form) env)))
-           expansion)))
-      ((define-symbol-macro)
-       (destructuring-bind (def name expansion) form
-         (signal-macroexpansion *provider-hook* name def)
-         (return-from instrumenting-macroexpand-hook
-           (let ((*macroexpand-hook* *old-macroexpand-hook*))
-             (funcall *old-macroexpand-hook* fun
-                      `(,def ,name (signal-symbol-macroexpansion ',name ,expansion))
-                      env)))))
-      ((defun)
-       (destructuring-bind (defun name arg-list &rest maybe-body) form
-         (signal-macroexpansion *provider-hook* name (first form))
-         (let ((*macroexpand-hook* *old-macroexpand-hook*))
-           (return-from instrumenting-macroexpand-hook
-             (funcall *old-macroexpand-hook* fun
-                      `(,defun ,name ,arg-list
-                         ,@(instrument-defun-body maybe-body
-                                                  `(signal-macroexpansion *user-hook* ',name 'defun)))
-                      env)))))
-      ((with-open-file) ; XXX: heuristic, doesn't catch every file creation.
-       (destructuring-bind (stream pathname &key (direction :input)
-                                   &allow-other-keys)
-           (second form)
-         (declare (ignore stream))
-         (when (eql direction :output)
-           (let ((*macroexpand-hook* *old-macroexpand-hook*))
+          ((defgeneric)
+           (signal-macroexpansion *provider-hook* (second form) 'defgeneric)
+           (let ((method-combination (second (assoc :method-combination (nthcdr 3 form)))))
+             (when method-combination
+               (signal-macroexpansion *user-hook* method-combination 'define-method-combination))))
+          ((defvar defparameter)
+           (signal-macroexpansion *provider-hook* (second form) 'defvar)
+           (setf (gethash (second form) *suspected-variables*) t))
+          ((defmethod)
+           (signal-macroexpansion *user-hook* (second form) 'defgeneric)
+           ;; walk arg list and signal use of specialized-on
+           ;; classes, and instrument function body.
+           (let* ((name (second form))
+                  (new-expansion
+                   `(defmethod ,name
+                        ,@(loop for (elt . body) on (nthcdr 2 form)
+                                if (not (listp elt))
+                                  collect elt into modifiers
+                                else
+                                  do (signal-macroexpansion *provider-hook* `(,name ,@modifiers ,elt) 'defmethod)
+                                  and do
+                                    (loop for arg in elt
+                                          when (and (listp arg)
+                                                    (symbolp (second arg)))
+                                            do (signal-macroexpansion *user-hook* (second arg) 'defclass))
+                                  and collect elt into modifiers
+                                  and collect elt
+                                  and append (instrument-defun-body body
+                                                        `(signal-macroexpansion
+                                                                *user-hook*
+                                                                '(,name ,@modifiers)
+                                                                'defmethod))
+                                  and do (loop-finish)
+                                collect elt))))
+             ;; (format *debug-io* "~&~S becomes:~&~S~%~%" form new-expansion)
              (return-from instrumenting-macroexpand-hook
-               (funcall *old-macroexpand-hook* fun
-                        `(with-open-file ,(second form)
-                           ,@(instrument-defun-body
-                              (cddr form)
-                              `(signal-macroexpansion *provider-hook*
-                                                      (namestring (merge-pathnames ,pathname))
-                                                      'file-component)))
-                        env))))))
-      (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro))))
-  (signal-symbol-use-in-form form)
-  ;; XXX: heuristic, doesn't catch everything:
-  (signal-possible-special-variable-use-in-form form) 
+               (funcall *old-macroexpand-hook* fun new-expansion env))))
+          ((defclass define-condition)
+           (signal-macroexpansion *provider-hook* (second form) (first form))
+           ;; signal use of direct
+           ;; superclasses/superconditions. Note that we
+           ;; declare a dependency only if the direct
+           ;; superclass is already defined through the
+           ;; current system definition.
+           (loop for superclass in (third form)
+                 do (signal-macroexpansion *user-hook* superclass (first form))))
+          ((defstruct)
+           (let ((name (etypecase (second form)
+                         (symbol (second form))
+                         (cons (first (second form))))))
+             (signal-macroexpansion *provider-hook* name 'defclass)))
+          ((defpackage)
+           ;; signal a use for the package first, to do the package
+           ;; redefinition dance right.
+           (signal-macroexpansion *user-hook*
+                                  (canonical-package-name (second form))
+                                  'defpackage)
+           (signal-macroexpansion *provider-hook*
+                                  (canonical-package-name (second form))
+                                  'defpackage)
+           (labels ((clause-contents (clause-name &optional (filter #'rest))
+                      (mapcar #'canonical-package-name
+                              (reduce #'append
+                                      (mapcar filter
+                                              (remove-if-not (lambda (clause)
+                                                               (eql clause-name
+                                                                    (first clause)))
+                                                             (nthcdr 2 form))))))
+                    (clause-second-element (clause)
+                      (list (second clause))))
+             (loop for nickname in (clause-contents :nickname)
+                   do (signal-macroexpansion *provider-hook* nickname 'defpackage))
+             ;; signal :uses of packages
+             (loop for use in (append (clause-contents :use)
+                                      (clause-contents :import-from
+                                             #'clause-second-element)
+                                      (clause-contents :shadowing-import-from
+                                             #'clause-second-element))
+                   do (signal-macroexpansion *user-hook*
+                                             (canonical-package-name use)
+                             'defpackage))))
+          ((in-package)
+           (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
+
+          ((defconstant)       
+           (signal-macroexpansion *provider-hook* (second form) (first form))
+           (return-from instrumenting-macroexpand-hook
+             (let* ((*macroexpand-hook* *old-macroexpand-hook*)
+                    (expansion (funcall *old-macroexpand-hook* (macro-function 'symbol-macroify)
+                                        `(symbol-macroify ,@form) env)))
+               expansion)))
+          ((define-symbol-macro)
+           (destructuring-bind (def name expansion) form
+             (signal-macroexpansion *provider-hook* name def)
+             (return-from instrumenting-macroexpand-hook
+               (let ((*macroexpand-hook* *old-macroexpand-hook*))
+                 (funcall *old-macroexpand-hook* fun
+                          `(,def ,name (signal-symbol-macroexpansion ',name ,expansion))
+                          env)))))
+          ((defun)
+           (destructuring-bind (defun name arg-list &rest maybe-body) form
+             (signal-macroexpansion *provider-hook* name (first form))
+             (let ((*macroexpand-hook* *old-macroexpand-hook*))
+               (return-from instrumenting-macroexpand-hook
+                 (funcall *old-macroexpand-hook* fun
+                          `(,defun ,name ,arg-list
+                             ,@(instrument-defun-body maybe-body
+                                                      `(signal-macroexpansion *user-hook* ',name 'defun)))
+                          env)))))
+          ((with-open-file) ; XXX: heuristic, doesn't catch every file creation.
+           (destructuring-bind (stream pathname &key (direction :input)
+                                       &allow-other-keys)
+               (second form)
+             (declare (ignore stream))
+             (when (eql direction :output)
+               (let ((*macroexpand-hook* *old-macroexpand-hook*))
+                 (return-from instrumenting-macroexpand-hook
+                   (funcall *old-macroexpand-hook* fun
+                            `(with-open-file ,(second form)
+                               ,@(instrument-defun-body
+                                  (cddr form)
+                                  `(signal-macroexpansion *provider-hook*
+                                                          (namestring (merge-pathnames ,pathname))
+                                                          'file-component)))
+                            env))))))
+          (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro)))
+      (signal-symbol-use-in-form form)
+    ;; XXX: heuristic, doesn't catch everything:
+      (signal-possible-special-variable-use-in-form form))) 
   (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
     expanded))
 
@@ -381,17 +387,20 @@ their :additional-dependencies."
      :symbol-translations (simple-copy-hash-table (symbol-translations state)
                                                   :test #'eql)))
 
-(defun grovel-dependencies (system stream &key interesting verbose cull-redundant
+(defun grovel-dependencies (system-or-systems stream &key interesting verbose cull-redundant
                             (base-pathname (truename
                                             (make-pathname
                                              :type nil
                                              :name nil
-                                             :defaults (asdf:component-pathname system))))
+                                             :defaults *load-truename*)))
                             initial-state)
   (let* ((state (if initial-state
                     (copy-state initial-state)
                     (make-instance 'grovel-state)))
-         (system (asdf:find-system system))
+         (systems (mapcar #'asdf:find-system
+                          (if (consp system-or-systems)
+                              system-or-systems
+                              (list system-or-systems))))
          (providers (providers state))
          (dependencies (dependencies state))
 
@@ -416,8 +425,11 @@ their :additional-dependencies."
                (when (and (interestingp from)
                           (some #'interestingp to-components))
                  (setf (gethash from dependencies)
-                       (remove-duplicates (append (remove-if-not #'interestingp to-components)
-                                                  (gethash from dependencies))))))
+                       (delete-duplicates (append (remove-if-not #'interestingp to-components)
+                                                  (gethash from dependencies))))
+                 (loop for component in to-components
+                       do (pushnew (asdf:component-system component)
+                                   (gethash (asdf:component-system from) dependencies)))))
              (coerce-name (maybe-class)
                (if (typep maybe-class 'standard-class)
                    (class-name maybe-class)
@@ -435,23 +447,25 @@ their :additional-dependencies."
               (*compile-verbose* verbose)
               ;; (*break-on-signals* 'warning)
               )
-          (asdf:oos 'asdf:load-op system :verbose verbose))
+          (dolist (system systems)
+            (asdf:oos 'asdf:load-op system :verbose verbose)))
         (let ((*print-case* :downcase))
           (format stream ";;; This file contains -*- lisp -*- expressions.~%")
-          (format stream "~@<;;; ~@;AUTO-GENERATED file from system definition of system ~A in ~
-                                   ~A.
+          (format stream "~@<;;; ~@;AUTO-GENERATED file from system definition of system ~A ~
                                    Instead of directly editing this file, please edit the system definition~P of~
                                    ~{ ~A~^ or~}, then re-generate this file.~:@>"
-                  (asdf:component-name system)
-                  (make-pathname :directory nil :defaults (asdf:component-pathname system))
+                  (mapcar #'asdf:component-name systems)
                   (length interesting) (mapcar #'asdf:component-name interesting))
           (format stream "~&(~%")
           (dolist (system interesting)
-            (format stream "~&;; ex ~A~%" (asdf:component-name system))
+            (format stream "~& (~S~@[ :depends-on ~:S~] :components~%  (" (asdf:component-name system)
+                    (delete (asdf:component-name system)
+                            (mapcar #'asdf:component-name (gethash system dependencies))
+                            :test #'equal))
             (loop for component in (system-file-components system)
                   for 1-dependencies = (gethash component dependencies)
                   do (let ((*package* (find-package :keyword)))
-                       (format stream "~& (~S ~A~@[~%  :depends-on ~:A~]~@[~%  ~{ ~S~}~])~%"
+                       (format stream "~&   (~S ~A~@[~&    :depends-on ~:A~]~@[~&    ~{ ~S~}~])"
                                ;; component class:
                                (cond
                                  ;; standard instrumented component with no output file type, and
@@ -492,7 +506,8 @@ their :additional-dependencies."
 
                                ;; component initargs
                                (and (typep component 'instrumented-cl-source-file)
-                                    (additional-initargs component))))))
+                                    (additional-initargs component)))))
+            (format stream "))~%"))
           (format stream "~&)~%"))))
     state))
 
