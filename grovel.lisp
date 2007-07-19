@@ -16,11 +16,11 @@
     (funcall hook name macro-type component)))
 
 (defun signal-user (name form-type)
-  (signal-user name form-type)
+  (signal-macroexpansion *user-hook* name form-type)
   (values))
 
 (defun signal-provider (name form-type)
-  (signal-provider name form-type)
+  (signal-macroexpansion *provider-hook* name form-type)
   (values))
 
 (defun signal-symbol-use-in-form (form)
@@ -159,19 +159,18 @@ keeping declarations intact."
              (funcall *old-macroexpand-hook* ,function
                       (progn ,@new-macro-body) ,env))))
 
-(defgeneric handle-macroexpansion (translated-name form &key name function environment)
-  (:documentation "Handler for the macroexpansions of forms.
-Returns two values: a boolean indicating whether the handler intends to replace the macroexpansion,
-                    an optional form which is the new macroexpansion, or NIL.")
-  (:method (translated-name form &key name &allow-other-keys)
-    (signal-user name 'defmacro)))
+(defun handle-macroexpansion (translated-name form function environment)
+  (let ((handler (gethash translated-name *macroexpansion-handlers*)))
+    (if  handler
+         (funcall handler
+                  form :function function :environment environment)
+         (signal-user (first form) 'defmacro))))
 
 ;;; The hook itself
 (defun instrumenting-macroexpand-hook (fun form env)
   (when (listp form)
     (multiple-value-bind (replacep new-form)
-        (handle-macroexpansion (unalias-symbol (first form)) form
-                               :function fun :environment env :name (first form))
+        (handle-macroexpansion (unalias-symbol (first form)) form fun env)
       (signal-symbol-use-in-form form)
       ;; XXX: heuristic, doesn't catch everything:
       (signal-possible-special-variable-use-in-form form)

@@ -3,6 +3,8 @@
 (defvar *provider-hook* nil)
 (defvar *user-hook* nil)
 
+(defvar *macroexpansion-handlers* (make-hash-table :test #'eql))
+
 (defvar *old-macroexpand-hook* nil
   "When the override macroexpand hook is active, this is bound to
   the old value of *macroexpand-hook*.")

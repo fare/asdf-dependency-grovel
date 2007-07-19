@@ -13,28 +13,29 @@
 
 (in-package :asdf-dependency-grovel)
 
-(defmacro define-macroexpand-handlers ((translated-name form
-                                        &key (name (gensym) namep)
-                                        (environment (gensym) environmentp)
-                                        (function (gensym) functionp))
+(defmacro define-macroexpand-handlers ((form &key
+                                             (environment (gensym) environmentp)
+                                             (function (gensym) functionp))
                                        (&rest form-names) &body body)
   `(progn
      ,@(loop for form-name in form-names
-             collect `(defmethod handle-macroexpansion
-                          ((,translated-name (eql ',form-name)) ,form
-                           &key ,@(and namep `(,name))
-                           ,@(and functionp `(,function))
-                           ,@(and environmentp `(,environment))
+             for fun-name = (intern (format nil "HANDLE-MACROEXPANSION-~A"
+                                            form-name))
+             collect `(defun ,fun-name
+                          (,form &key
+                           ,@(and functionp `(((:function ,function))))
+                           ,@(and environmentp `(((:environment ,environment))))
                            &allow-other-keys)
-                        ,@body))))
+                        ,@body)
+             collect `(setf (gethash ',form-name *macroexpansion-handlers*)
+                            ',fun-name))))
 
 (defmacro define-simple-macroexpand-handlers (form-var identifier-form
                                               signal-type signal-form-type
                                               (&rest form-names))
   
-  (let ((t-name (gensym))
-        (identifier (gensym)))
-    `(define-macroexpand-handlers (,t-name ,form-var) (,@form-names)
+  (let ((identifier (gensym)))
+    `(define-macroexpand-handlers (,form-var) (,@form-names)
        (let ((,identifier ,identifier-form))
          (,(ecase signal-type
              (:user 'signal-user)
@@ -42,19 +43,20 @@
            ,identifier ,signal-form-type)
          (does-not-macroexpand)))))
 
-(define-macroexpand-handlers (name form) (defmacro define-method-combination)
-  (signal-provider (second form) name)
+(define-macroexpand-handlers (form) (defmacro define-method-combination)
+  (signal-provider (second form) (first form))
   (does-not-macroexpand))
 
 (define-simple-macroexpand-handlers form
     (second form) :provider 'setf
     (defsetf define-setf-expander))
 
-(define-simple-macroexpand-handlers form
-    (first (second form)) :user 'setf
-    (setf))
+(define-macroexpand-handlers (form) (setf)
+  (when (consp (second form))
+    (signal-user (first (second form)) 'setf))
+  (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form) (defgeneric)
+(define-macroexpand-handlers (form) (defgeneric)
   (signal-provider (second form) 'defgeneric)
   (let ((method-combination (second (assoc :method-combination
                                            (nthcdr 3 form)))))
@@ -62,12 +64,12 @@
       (signal-user method-combination 'define-method-combination)))
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form) (defvar defparameter)
+(define-macroexpand-handlers (form) (defvar defparameter)
   (signal-provider (second form) 'defvar)
   (setf (gethash (second form) *suspected-variables*) t)
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form :function fun :environment env)
+(define-macroexpand-handlers (form :function fun :environment env)
     (defmethod)
   (signal-user  (second form) 'defgeneric)
   ;; walk arg list and signal use of specialized-on
@@ -98,7 +100,7 @@
     (does-macroexpand (fun env :macroexpand-hook *macroexpand-hook*)
       new-expansion)))
 
-(define-macroexpand-handlers (name form) (defclass define-condition)
+(define-macroexpand-handlers (form) (defclass define-condition)
   (signal-provider (second form) (first form))
   ;; signal use of direct
   ;; superclasses/superconditions. Note that we
@@ -109,14 +111,14 @@
         do (signal-user superclass (first form)))
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form) (defstruct)
+(define-macroexpand-handlers (form) (defstruct)
   (let ((name (etypecase (second form)
                 (symbol (second form))
                 (cons (first (second form))))))
     (signal-provider name 'defclass))  
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form) (defpackage)
+(define-macroexpand-handlers (form) (defpackage)
   ;; signal a use for the package first, to do the package
   ;; redefinition dance right.
   (signal-user
@@ -148,24 +150,24 @@
                     'defpackage)))
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form) (in-package)
+(define-macroexpand-handlers (form) (in-package)
   (signal-user (canonical-package-name (second form)) 'defpackage)
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (name form :environment env)
+(define-macroexpand-handlers (form :environment env)
     (defconstant)
   (signal-provider (second form) (first form))
   (does-macroexpand ((macro-function 'symbol-macroify) env)
     `(symbol-macroify ,@form)))
 
-(define-macroexpand-handlers (name form :function fun :environment env)
+(define-macroexpand-handlers (form :function fun :environment env)
     (define-symbol-macro)
   (destructuring-bind (def name expansion) form
     (signal-provider name def)
     (does-macroexpand (fun env)
       `(,def ,name (signal-symbol-macroexpansion ',name ,expansion)))))
 
-(define-macroexpand-handlers (name form :function fun :environment env) (defun)
+(define-macroexpand-handlers (form :function fun :environment env) (defun)
   (destructuring-bind (defun name arg-list &rest maybe-body) form
     (signal-provider name (first form))
     (does-macroexpand (fun env)
@@ -173,7 +175,7 @@
          ,@(instrument-defun-body maybe-body
                                   `(signal-user ',name 'defun))))))
 
-(define-macroexpand-handlers (name form :function fun :environment env)
+(define-macroexpand-handlers (form :function fun :environment env)
     (with-open-file)
   (destructuring-bind (stream pathname &key (direction :input)
                               &allow-other-keys)
