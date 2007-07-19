@@ -1,18 +1,6 @@
 ;;; ADSF dependency groveler using macroexpand-hook. Fairly precise,
 ;;; at least for the mcclim system.
 
-;;; TODO:
-;; * handle more def*:
-;;  * defvar & defparameter - works for symbols that are named
-;;    *something* and are used /somewhere/ in a macro in the dependent
-;;    file.
-;;  * define-compiler-macro - argh. seriously, no idea. if you use
-;;    this at compile/load time, sorry.
-;;  * deftype - we can signal that it was provided, but have to walk
-;;    declarations in def* and generally almost /everwhere/. not fun.
-
-;; * more package games: :use, :import-from, :shadow
-
 (cl:in-package #:asdf-dependency-grovel)
 
 ;;; macroexpand hook and helper functions/macros
@@ -27,12 +15,20 @@
   (when (and hook component)
     (funcall hook name macro-type component)))
 
+(defun signal-user (name form-type)
+  (signal-user name form-type)
+  (values))
+
+(defun signal-provider (name form-type)
+  (signal-provider name form-type)
+  (values))
+
 (defun signal-symbol-use-in-form (form)
   (labels ((signal-for-symbol (sym)
              (unless (or (null (symbol-package sym))
                          (member (symbol-package sym)
                                  (mapcar #'find-package '(:keyword :cl))))
-               (signal-macroexpansion *user-hook* (canonical-package-name (symbol-package sym)) 'defpackage))))
+               (signal-user (canonical-package-name (symbol-package sym)) 'defpackage))))
     (cond ((symbolp form) (signal-for-symbol form))
           ((consp form)
            (loop for (car . cdr) on form
@@ -43,7 +39,7 @@
 (defun signal-possible-special-variable-use-in-form (form)
   (labels ((signal-for-symbol (sym)
              (when (gethash sym *suspected-variables*)
-               (signal-macroexpansion *user-hook* sym 'defvar))))
+               (signal-user sym 'defvar))))
     (cond ((symbolp form)
            (signal-for-symbol form))
           ((consp form)
@@ -53,12 +49,12 @@
                    do (signal-for-symbol cdr))))))
 
 (defun signal-symbol-macroexpansion (name expansion)
-  (signal-macroexpansion *user-hook* name 'define-symbol-macro)
+  (signal-user name 'define-symbol-macro)
   expansion)
 
 (defsetf signal-symbol-macroexpansion (name expression) (new-value)
   `(progn
-     (signal-macroexpansion *user-hook* ',name 'define-symbol-macro)
+     (signal-user ',name 'define-symbol-macro)
      (setf ,expression ,new-value)))
 
 (defmacro symbol-macroify (operator name &rest args &environment env)
@@ -108,13 +104,13 @@ keeping declarations intact."
     `(let ((,old-features (copy-list *features*)))
        (prog1 (progn ,@body)
               (dolist (,new-feature (set-difference *features* ,old-features))
-                (signal-macroexpansion *provider-hook* ,new-feature 'feature))
+                (signal-provider ,new-feature 'feature))
               (dolist (,removed-feature (set-difference ,old-features *features*))
-                (signal-macroexpansion *provider-hook* ,removed-feature 'removed-feature))))))
+                (signal-provider ,removed-feature 'removed-feature))))))
 
 
 (labels ((signal-feature (presentp feature)
-           (signal-macroexpansion *user-hook* feature
+           (signal-user feature
                                   (if presentp 'feature 'removed-feature)))
          (featurep (x)
            (if (consp x)
@@ -153,149 +149,36 @@ keeping declarations intact."
   ;; TODO: #.
   readtable)
 
+(defun does-not-macroexpand ()
+  (values nil nil))
+
+(defmacro does-macroexpand ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
+                            &body new-macro-body)
+  `(values t
+           (let ((*macroexpand-hook* ,macroexpand-hook))
+             (funcall *old-macroexpand-hook* ,function
+                      (progn ,@new-macro-body) ,env))))
+
+(defgeneric handle-macroexpansion (translated-name form &key name function environment)
+  (:documentation "Handler for the macroexpansions of forms.
+Returns two values: a boolean indicating whether the handler intends to replace the macroexpansion,
+                    an optional form which is the new macroexpansion, or NIL.")
+  (:method (translated-name form &key name &allow-other-keys)
+    (signal-user name 'defmacro)))
+
+;;; The hook itself
 (defun instrumenting-macroexpand-hook (fun form env)
   (when (listp form)
-    (unwind-protect
-        (case (unalias-symbol (first form))
-          ((defmacro define-method-combination)
-           (signal-macroexpansion *provider-hook* (second form) (first form)))
-          ((defsetf define-setf-expander)
-           (signal-macroexpansion *provider-hook* (second form) 'setf))
-          ((setf)
-           (when (listp (second form))
-             (signal-macroexpansion *user-hook* (first (second form)) 'setf)))
-                  
-          ((defgeneric)
-           (signal-macroexpansion *provider-hook* (second form) 'defgeneric)
-           (let ((method-combination (second (assoc :method-combination (nthcdr 3 form)))))
-             (when method-combination
-               (signal-macroexpansion *user-hook* method-combination 'define-method-combination))))
-          ((defvar defparameter)
-           (signal-macroexpansion *provider-hook* (second form) 'defvar)
-           (setf (gethash (second form) *suspected-variables*) t))
-          ((defmethod)
-           (signal-macroexpansion *user-hook* (second form) 'defgeneric)
-           ;; walk arg list and signal use of specialized-on
-           ;; classes, and instrument function body.
-           (let* ((name (second form))
-                  (new-expansion
-                   `(defmethod ,name
-                        ,@(loop for (elt . body) on (nthcdr 2 form)
-                                if (not (listp elt))
-                                  collect elt into modifiers
-                                else
-                                  do (signal-macroexpansion *provider-hook* `(,name ,@modifiers ,elt) 'defmethod)
-                                  and do
-                                    (loop for arg in elt
-                                          when (and (listp arg)
-                                                    (symbolp (second arg)))
-                                            do (signal-macroexpansion *user-hook* (second arg) 'defclass))
-                                  and collect elt into modifiers
-                                  and collect elt
-                                  and append (instrument-defun-body body
-                                                        `(signal-macroexpansion
-                                                                *user-hook*
-                                                                '(,name ,@modifiers)
-                                                                'defmethod))
-                                  and do (loop-finish)
-                                collect elt))))
-             ;; (format *debug-io* "~&~S becomes:~&~S~%~%" form new-expansion)
-             (return-from instrumenting-macroexpand-hook
-               (funcall *old-macroexpand-hook* fun new-expansion env))))
-          ((defclass define-condition)
-           (signal-macroexpansion *provider-hook* (second form) (first form))
-           ;; signal use of direct
-           ;; superclasses/superconditions. Note that we
-           ;; declare a dependency only if the direct
-           ;; superclass is already defined through the
-           ;; current system definition.
-           (loop for superclass in (third form)
-                 do (signal-macroexpansion *user-hook* superclass (first form))))
-          ((defstruct)
-           (let ((name (etypecase (second form)
-                         (symbol (second form))
-                         (cons (first (second form))))))
-             (signal-macroexpansion *provider-hook* name 'defclass)))
-          ((defpackage)
-           ;; signal a use for the package first, to do the package
-           ;; redefinition dance right.
-           (signal-macroexpansion *user-hook*
-                                  (canonical-package-name (second form))
-                                  'defpackage)
-           (signal-macroexpansion *provider-hook*
-                                  (canonical-package-name (second form))
-                                  'defpackage)
-           (labels ((clause-contents (clause-name &optional (filter #'rest))
-                      (mapcar #'canonical-package-name
-                              (reduce #'append
-                                      (mapcar filter
-                                              (remove-if-not (lambda (clause)
-                                                               (eql clause-name
-                                                                    (first clause)))
-                                                             (nthcdr 2 form))))))
-                    (clause-second-element (clause)
-                      (list (second clause))))
-             (loop for nickname in (clause-contents :nickname)
-                   do (signal-macroexpansion *provider-hook* nickname 'defpackage))
-             ;; signal :uses of packages
-             (loop for use in (append (clause-contents :use)
-                                      (clause-contents :import-from
-                                             #'clause-second-element)
-                                      (clause-contents :shadowing-import-from
-                                             #'clause-second-element))
-                   do (signal-macroexpansion *user-hook*
-                                             (canonical-package-name use)
-                             'defpackage))))
-          ((in-package)
-           (signal-macroexpansion *user-hook* (canonical-package-name (second form)) 'defpackage))
-
-          ((defconstant)       
-           (signal-macroexpansion *provider-hook* (second form) (first form))
-           (return-from instrumenting-macroexpand-hook
-             (let* ((*macroexpand-hook* *old-macroexpand-hook*)
-                    (expansion (funcall *old-macroexpand-hook* (macro-function 'symbol-macroify)
-                                        `(symbol-macroify ,@form) env)))
-               expansion)))
-          ((define-symbol-macro)
-           (destructuring-bind (def name expansion) form
-             (signal-macroexpansion *provider-hook* name def)
-             (return-from instrumenting-macroexpand-hook
-               (let ((*macroexpand-hook* *old-macroexpand-hook*))
-                 (funcall *old-macroexpand-hook* fun
-                          `(,def ,name (signal-symbol-macroexpansion ',name ,expansion))
-                          env)))))
-          ((defun)
-           (destructuring-bind (defun name arg-list &rest maybe-body) form
-             (signal-macroexpansion *provider-hook* name (first form))
-             (let ((*macroexpand-hook* *old-macroexpand-hook*))
-               (return-from instrumenting-macroexpand-hook
-                 (funcall *old-macroexpand-hook* fun
-                          `(,defun ,name ,arg-list
-                             ,@(instrument-defun-body maybe-body
-                                                      `(signal-macroexpansion *user-hook* ',name 'defun)))
-                          env)))))
-          ((with-open-file) ; XXX: heuristic, doesn't catch every file creation.
-           (destructuring-bind (stream pathname &key (direction :input)
-                                       &allow-other-keys)
-               (second form)
-             (declare (ignore stream))
-             (when (eql direction :output)
-               (let ((*macroexpand-hook* *old-macroexpand-hook*))
-                 (return-from instrumenting-macroexpand-hook
-                   (funcall *old-macroexpand-hook* fun
-                            `(with-open-file ,(second form)
-                               ,@(instrument-defun-body
-                                  (cddr form)
-                                  `(signal-macroexpansion *provider-hook*
-                                                          (namestring (merge-pathnames ,pathname))
-                                                          'file-component)))
-                            env))))))
-          (otherwise (signal-macroexpansion *user-hook* (first form) 'defmacro)))
+    (multiple-value-bind (replacep new-form)
+        (handle-macroexpansion (unalias-symbol (first form)) form
+                               :function fun :environment env :name (first form))
       (signal-symbol-use-in-form form)
-    ;; XXX: heuristic, doesn't catch everything:
-      (signal-possible-special-variable-use-in-form form))) 
-  (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
-    expanded))
+      ;; XXX: heuristic, doesn't catch everything:
+      (signal-possible-special-variable-use-in-form form)
+      (if replacep
+          new-form
+          (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
+            expanded)))))
 
 ;;; The actual groveling part.
 
