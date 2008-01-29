@@ -1,3 +1,16 @@
+* Changes in 1.0.0 relative to 0.6.3:
+** Lots of changes sponsored by ITA Software:
+*** Standard compliance: Better parsing of declare/docstring combinations.
+*** Better recognition of just about everything.
+*** Incremental dependency groveling.
+** Tentative openmcl support.
+** Put the macroexpansion handler definitions into handlers/00-standard-handlers.lisp
+   for easier extension by user packages.
+** Exported signal-user and signal-provider functions to ease recognition of
+   complex dependencies in user code.
+** Put asdf-dependency-grovel:groveling on *features* if the groveler
+   is active.
+
 * Changes in 0.6.3 relative to 0.6.2:
 ** Fixed a silly bug in the last refactoring that caused duplicate names.
 

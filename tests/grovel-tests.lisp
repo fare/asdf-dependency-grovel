@@ -1,7 +1,7 @@
 ;;; Define the package of the test framework
 (cl:defpackage :asdf-dependency-grovel-tester
   (:use :cl)
-  (:export #:test-result))
+  (:export #:test-result #:check-base-deps))
 
 (cl:in-package :asdf-dependency-grovel-tester)
 
@@ -25,7 +25,8 @@
                                (remove-if-not
                                 (lambda (comp
                                          &aux (mismatch
-                                               (mismatch provider-comp (getf comp :file))))
+                                               (mismatch provider-comp
+                                                         (getf comp :file))))
                                   (or (not mismatch)
                                       (eql (length provider-comp) mismatch)))
                                 all-comps)))
@@ -37,13 +38,13 @@
 
 (load "../asdf-dependency-grovel.asd")
 (push *load-truename* asdf:*central-registry*)
-(setf *break-on-signals* '(or error warning))
+;; (setf *break-on-signals* '(or error warning))
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (asdf:oos 'asdf:load-op :asdf-dependency-grovel))
 (push #p"." asdf:*central-registry*)
-(asdf:oos 'asdf-dependency-grovel:dependency-op :test-serial)
 
 (defun test-result ()
+  (asdf:oos 'asdf-dependency-grovel:dependency-op :test-serial)
   (let ((comps (asdf-dependency-grovel:read-component-file
                 "groveled-components.lisp" :test-serial-system))
         (failed nil))
@@ -56,3 +57,6 @@
         (format t "~&;;; ALL TESTS PASSED!~%")
         (format t "~&;;; TESTS failed: ~:{~&;; ~A should have: ~S, has ~S~}~%" failed))
     (length failed)))
+
+(defun check-base-deps ()
+  (asdf:oos 'asdf-dependency-grovel:compare-dependency-op :test-serial))

@@ -1,0 +1,8 @@
+* dump core with the dependency info and make it possible to continue from there
+* it should be necessary to compile&load only those files that changed.
+* dependency tracking refactoring:
+** if component A provides X which is already provided somewhere else,
+   things using X need to depend on A
+** need a way to re-provide something: have an explicit component order. This
+   happened implicitly before, but we now need to track the /reason/
+   why things depend on each other.
