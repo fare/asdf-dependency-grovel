@@ -1,8 +1,8 @@
 tests:
-	./tests/run-tests.sbcl.sh tests
+	./tests/run-tests.sbcl.sh
 
 clean:
-	rm -f *.fasl
+	rm -f *.fasl */*.fasl
 
 .PHONY: tests clean
 

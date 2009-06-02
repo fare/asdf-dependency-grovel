@@ -173,9 +173,9 @@ keeping declarations intact."
                             &body new-macro-body)
   `(values t
            (let ((*macroexpand-hook* ,macroexpand-hook))
-             (debug-print "Macroexpanding into"
+             ;;(debug-print "Macroexpanding into"
                           (funcall *old-macroexpand-hook* ,function
-                                   (progn ,@new-macro-body) ,env)))))
+                                   (progn ,@new-macro-body) ,env))));)
 
 (defun handle-macroexpansion (translated-name form function environment)
   (let ((handler (gethash (list (canonical-package-name (symbol-package translated-name))
@@ -515,7 +515,7 @@ after operating on a component).")
      ,@body))
 
 (defmacro with-groveling-environment ((state verbose debug-object-types
-                                                   base-pathname)
+					     base-pathname)
                                             &body body)
   `(let* ((*current-dependency-state* ,state)
           (*features* (adjoin 'groveling *features*))

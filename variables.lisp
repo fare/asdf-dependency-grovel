@@ -37,3 +37,9 @@ dependency information should be printed.")
 
 (defvar *component-dependency-op-times* (make-hash-table)
   "Maps components to the last universal-time they were groveled.")
+
+(defvar *system-base-dir* nil
+  "Designates the directory under which ADG will create its temporary directory
+for instrumented dependency-discovery FASLs.
+When nil, ADG will use the base-pathname of the target system;
+when non-nil, ADG will use that value as a pathname designator for it.")

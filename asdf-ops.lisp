@@ -35,7 +35,7 @@
   "Put instrumented FASL files in a temporary directory relative
 to the base of the system."
   (let* ((output-file (car (call-next-method)))
-         (system-base-dir *default-pathname-defaults*)
+         (system-base-dir (or *system-base-dir* *default-pathname-defaults*))
          (dir-component (subseq (pathname-directory output-file)
                                 (or (mismatch (pathname-directory output-file)
                                               (pathname-directory system-base-dir)
@@ -174,6 +174,7 @@ to the base of the system."
   (let ((tmp-file-name (format nil "~A-~A"
                                (first (asdf:output-files op c))
                                (get-universal-time))))
+    (ensure-directories-exist tmp-file-name)
     (with-open-file (component-stream tmp-file-name
                                       :direction :output
                                       :if-does-not-exist :create
