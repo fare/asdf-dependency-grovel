@@ -169,13 +169,30 @@ keeping declarations intact."
   (format *debug-io* ";; D: ~A ~S~%" string value)
   value)
 
-(defmacro does-macroexpand ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
-                            &body new-macro-body)
-  `(values t
-           (let ((*macroexpand-hook* ,macroexpand-hook))
-             ;;(debug-print "Macroexpanding into"
-                          (funcall *old-macroexpand-hook* ,function
-                                   (progn ,@new-macro-body) ,env))));)
+(defmacro does-macroexpand
+    ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
+     new-macro-body)
+  `(values t (let ((*macroexpand-hook* ,macroexpand-hook))
+               ;;(debug-print "Macroexpanding into"
+               (funcall *old-macroexpand-hook* ,function
+                        ,new-macro-body ,env))));)
+
+
+;; Much like `does-macroexpand', but takes an additional `epilogue' parameter
+;; that should be a list of forms.  These forms will be inserted after the
+;; expanded `new-macro-body' within a progn.  Make sure that the last form in
+;; `epilogue' returns whatever the macro would have returned.  We'd like to
+;; just use multiple-value-prog1 instead of progn, but that doesn't necessarily
+;; preserve top-level-ness.  (msteele)
+(defmacro does-macroexpand-with-epilogue
+    ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
+     new-macro-body epilogue)
+  `(values t `(progn
+                ,(let ((*macroexpand-hook* ,macroexpand-hook))
+                   (funcall *old-macroexpand-hook* ,function
+                            ,new-macro-body ,env))
+                ,@,epilogue)))
+
 
 (defun handle-macroexpansion (translated-name form function environment)
   (let ((handler (gethash (list (canonical-package-name (symbol-package translated-name))

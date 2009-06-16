@@ -3,4 +3,8 @@
 (defstruct test-defstruct)
 
 (defstruct test-defstruct/function
-  a b c)
+  "This is a docstring."
+  (a 0 :type integer) b c)
+
+(defstruct (test-defstruct/quux (:conc-name test-defstruct/q-))
+  x y z)

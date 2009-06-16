@@ -41,7 +41,6 @@
 (defmacro define-simple-macroexpand-handlers (form-var identifier-form
                                               signal-type signal-form-type
                                               (&rest form-names))
-  
   (let ((identifier (gensym)))
     `(define-macroexpand-handlers (,form-var) (,@form-names)
        (let ((,identifier ,identifier-form))
@@ -51,13 +50,16 @@
            ,identifier ,signal-form-type)
          (does-not-macroexpand)))))
 
+
 (define-macroexpand-handlers (form) (defmacro define-method-combination)
   (signal-provider (second form) (first form))
   (does-not-macroexpand))
 
+
 (define-simple-macroexpand-handlers form
     (second form) :provider 'setf
     (defsetf define-setf-expander))
+
 
 (define-macroexpand-handlers (form) (setf)
   (loop for (setee value) on (cdr form) by #'cddr
@@ -69,11 +71,13 @@
               (signal-provider setee 'defvar))))
   (does-not-macroexpand))
 
+
 (define-macroexpand-handlers (form) (pushnew push)
   (let ((setee (third form)))
     (when (and (symbolp setee) (boundp setee))
       (signal-user setee 'defvar)
       (signal-provider setee 'defvar))))
+
 
 (define-macroexpand-handlers (form) (defgeneric)
   (signal-provider (second form) 'defgeneric)
@@ -83,10 +87,12 @@
       (signal-user method-combination 'define-method-combination)))
   (does-not-macroexpand))
 
+
 (define-macroexpand-handlers (form) (defvar defparameter)
   (signal-provider (second form) 'defvar)
   (setf (gethash (second form) *suspected-variables*) t)
   (does-not-macroexpand))
+
 
 (define-macroexpand-handlers (form :function fun :environment env)
     (defmethod)
@@ -118,6 +124,7 @@
     (does-macroexpand (fun env :macroexpand-hook *macroexpand-hook*)
       new-expansion)))
 
+
 (define-macroexpand-handlers (form) (defclass define-condition)
   (signal-provider (second form) (first form))
   (signal-provider (second form) 'deftype)
@@ -134,13 +141,59 @@
              (signal-user slot-type 'deftype)))
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (form) (defstruct)
-  (let ((name (etypecase (second form)
-                (symbol (second form))
-                (cons (first (second form))))))
-    (signal-provider name 'defclass)
-    (signal-provider (second form) 'deftype))  
-  (does-not-macroexpand))
+
+(define-macroexpand-handlers (form :function fun :environment env) (defstruct)
+  (destructuring-bind (header &rest body) (cdr form)
+    (destructuring-bind (name &rest struct-options)
+        (if (listp header) header (list header))
+      ;; Provide the class and type for this struct.
+      (signal-provider name 'defclass)
+      (signal-provider (second form) 'deftype)
+      ;; Deal with accessor functions.  The defstruct macro automatically
+      ;; defines a whole bunch of accessor functions, which we must
+      ;; "retroactively" instrument.  In particular, we must "manually"
+      ;; determine the names of the accessors, provide them (using
+      ;; signal-provider), and then wrap them so that they will call
+      ;; signal-user when called.
+      (let (;; Determine the prefix used to create accessor function names.
+            (prefix (let ((conc-name-option (assoc :conc-name struct-options)))
+                      (if conc-name-option
+                          (symbol-name (second conc-name-option))
+                          (concatenate 'string (symbol-name name) "-"))))
+            ;; Get the list of slot descriptions by chopping off the docstring
+            ;; (if any) from `body'.
+            (slot-descriptions (if (and (consp body) (stringp (car body)))
+                                   (cdr body) body)))
+        (loop :for slot-desc :in slot-descriptions
+              ;; Get the symbol for this slot's accessor.
+              :as accessor-name =
+                (destructuring-bind (slot-name &optional slot-init-value
+                                          &rest slot-options)
+                    (if (listp slot-desc) slot-desc (list slot-desc))
+                  (let* ((slot-name-str (symbol-name slot-name))
+                         (accessor-name-str
+                          (concatenate 'string prefix slot-name-str)))
+                    (intern accessor-name-str)))
+              ;; Provide this accessor.
+              :do (signal-provider accessor-name 'defun)
+              ;; Generate instrumentation for the accessor.
+              :collect (let ((temp (gensym)))
+                         `(let ((,temp (function ,accessor-name)))
+                            ;; Fun fact: this code _won't_ work properly:
+                            ;;     (defun ,accessor-name (&rest args)
+                            ;;       (signal-user ',accessor-name 'defun)
+                            ;;       (apply ,temp args))
+                            ;; ...but this code does.  See CLHS 3.2.2.3.
+                            (setf (symbol-function ',accessor-name)
+                                  (lambda (&rest args)
+                                    (signal-user ',accessor-name 'defun)
+                                    (apply ,temp args)))))
+                :into redefinitions
+              ;; Finally, put all the instrumentation into place.
+              :finally (return (does-macroexpand-with-epilogue (fun env)
+                                 form
+                                 (append redefinitions (list `',name)))))))))
+
 
 (define-macroexpand-handlers (form) (defpackage)
   ;; signal a use for the package first, to do the package
@@ -185,6 +238,7 @@
                              'internal-symbol))))
   (does-not-macroexpand))
 
+
 (define-macroexpand-handlers (form) (in-package)
   (when *previous-package*
     (signal-new-internal-symbols))
@@ -194,11 +248,12 @@
   (signal-user (canonical-package-name (second form)) 'defpackage)
   (does-not-macroexpand))
 
-(define-macroexpand-handlers (form :environment env)
-    (defconstant)
+
+(define-macroexpand-handlers (form :environment env) (defconstant)
   (signal-provider (second form) (first form))
   (does-macroexpand ((macro-function 'symbol-macroify) env)
     `(symbol-macroify ,@form)))
+
 
 (define-macroexpand-handlers (form :function fun :environment env)
     (define-symbol-macro)
@@ -206,6 +261,7 @@
     (signal-provider name def)
     (does-macroexpand (fun env)
       `(,def ,name (signal-symbol-macroexpansion ',name ,expansion)))))
+
 
 (define-macroexpand-handlers (form :function fun :environment env) (defun)
   (destructuring-bind (defun name arg-list &rest maybe-body) form
@@ -215,8 +271,8 @@
          ,@(instrument-defun-body maybe-body
                                   `(signal-user ',name 'defun))))))
 
-(define-macroexpand-handlers (form :function fun :environment env)
-    (lambda)
+
+(define-macroexpand-handlers (form :function fun :environment env) (lambda)
   (let ((name (gentemp "ASDF-DEPENDENCY-GROVEL-LAMBDA"
                        '#:asdf-dependency-grovel.lambdas)))
     (destructuring-bind (l arg-list &rest maybe-body) form
@@ -225,6 +281,7 @@
         `(,l ,arg-list
            ,@(instrument-defun-body maybe-body
                                     `(signal-user ',name 'defun)))))))
+
 
 (define-macroexpand-handlers (form :function fun :environment env)
     (with-open-file)
@@ -242,6 +299,7 @@
                     'file-component))))
         (does-not-macroexpand))))
 
+
 (labels ((traverse-subtypes (typespec)
            (cond
              ((consp typespec)
@@ -258,7 +316,7 @@
                 (:otherwise nil)))
              ((not (null typespec))
               (signal-user typespec 'deftype)))))
-  
+
   (define-macroexpand-handlers (form) (handler-bind handler-case)
     (loop for (condition . stuff) in (if (eql 'handler-bind (first form))
                                          (second form)
@@ -271,13 +329,12 @@
     (signal-provider (second form) 'deftype)
     (traverse-subtypes (fourth form))
     (does-not-macroexpand))
-  
+
   (define-macroexpand-handlers (form) (typecase etypecase)
     (loop for (typespec . rest) in (cddr form)
           do (traverse-subtypes typespec))
     (does-not-macroexpand))
-  
+
   (define-macroexpand-handlers (form) (check-type)
     (traverse-subtypes (third form))
     (does-not-macroexpand)))
-

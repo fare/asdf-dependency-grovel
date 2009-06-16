@@ -21,7 +21,7 @@
 
                ;; package system
                (:file "p-defpackage")
-               
+
                ;; defunoids / instrumented stuff
                (:file "p-defun")
                (:file "p-define-symbol-macro")
@@ -31,7 +31,7 @@
                (:file "p-deftype")
 
 ;;; users
-               
+
                ;; simple stuff
                (:file "u-defmacro")
                (:file "u-define-method-combination")
@@ -43,18 +43,22 @@
                ;; clos
                (:file "u-defclass.defclass")
                (:file "u-defclass.defmethod")
-               (:file "u-defstruct")
-               (:file "u-defstruct.defmethod")
-               (:file "u-defstruct.functions")
                (:file "u-defgeneric")
                (:file "u-defmethod")
                (:file "u-define-condition")
+
+               ;; structs
+               (:file "u-defstruct")
+               (:file "u-defstruct.type")
+               (:file "u-defstruct.defmethod")
+               (:file "u-defstruct.functions")
+               (:file "u-defstruct.functions.sharpquote")
 
                ;; package system
                (:file "u-defpackage")
                (:file "u-defpackage.1")
                (:file "u-defpackage.2")
-               
+
                ;; defunoids / instrumented stuff
                (:file "u-defun")
                (:file "u-defun.sharpquote")

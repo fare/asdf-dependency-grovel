@@ -51,11 +51,14 @@
     (loop for comp in comps
           do (handler-case (apply #'1-component comps comp)
                (failed-component (c)
-                 (push (list (failed-file c) (failed-dependency c) (actual-dependency c))
+                 (push (list (failed-file c)
+                             (failed-dependency c)
+                             (actual-dependency c))
                        failed))))
     (if (null failed)
         (format t "~&;;; ALL TESTS PASSED!~%")
-        (format t "~&;;; TESTS failed: ~:{~&;; ~A should have: ~S, has ~S~}~%" failed))
+        (format t "~&;;; TESTS failed: ~:{~&;; ~A should have: ~S, has ~S~}~%"
+                failed))
     (length failed)))
 
 (defun check-base-deps ()
