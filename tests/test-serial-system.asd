@@ -34,6 +34,7 @@
 
                ;; simple stuff
                (:file "u-defmacro")
+               (:file "u-defmacro.indirect")
                (:file "u-define-method-combination")
 
                ;; setf
