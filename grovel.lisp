@@ -791,6 +791,19 @@ after operating on a component).")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defmacro with-non-asdf-groveling (&body body)
+  `(progn
+     (setf *non-asdf-p* t)
+     (with-new-groveling-environment (t () #p".")
+       ,@body)))
+
+(defmacro instrumented-load (file)
+  (let ((temp (gensym)))
+    `(let ((,temp ,file))
+       (operating-on-component (,temp)
+         (with-groveling-macroexpand-hook
+           (load ,file))))))
+
 (defun print-big-ol-dependency-report (&key (state *current-dependency-state*)
                                             (stream t))
   (let ((comp-deps (slot-value state 'component-dependencies))
