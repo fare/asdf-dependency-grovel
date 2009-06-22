@@ -1,5 +1,9 @@
 (cl:in-package #:asdf-dependency-grovel)
 
+(defvar *non-asdf-p* nil
+  "When nil, assumes we're groveling ASDF-based code.
+When non-nil, assumes we're groveling non-ASDF-based code.")
+
 (defvar *macroexpansion-handlers* (make-hash-table :test #'equal))
 
 (defvar *old-macroexpand-hook* nil
@@ -20,11 +24,11 @@ were variables when used in forms.")
   "The state of dependency information for the current groveling run.")
 
 (defvar *previous-package* nil
-  "The package that was current previous to this run. Allows the 
+  "The package that was current previous to this run.  Allows the
 symbol-interning heuristic.")
 
 (defvar *previously-interned-symbols* (make-hash-table :test #'eql)
-  "The symbols that were interned in *previous-package* before the 
+  "The symbols that were interned in *previous-package* before the
 current in-package stretch.")
 
 (defvar *grovel-dir-suffix* nil

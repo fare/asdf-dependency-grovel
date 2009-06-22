@@ -5,24 +5,52 @@
 
 ;;; macroexpand hook and helper functions/macros
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utility Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun debug-print (string value)
+  (format *debug-io* ";; D: ~A ~S~%" string value)
+  value)
+
 (defun canonical-package-name (package-designator)
   (intern (typecase package-designator
             (package (package-name package-designator))
             (t (string package-designator)))
           :asdf-dependency-grovel.packages))
 
+(defmacro symbol-macroify (operator name &rest args &environment env)
+  (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-"
+                                   operator))))
+    `(progn
+       (define-symbol-macro ,name ,new-name)
+       ,(macroexpand `(,operator ,new-name ,@args) env))))
+
+(defmacro define-symbol-alias (new-symbol ansi-symbol)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (when (and (boundp '*symbol-translations*)
+                (hash-table-p *symbol-translations*))
+       (setf (gethash ',new-symbol *symbol-translations*) ',ansi-symbol))))
+
+(defun unalias-symbol (form)
+  (if (boundp '*symbol-translations*)
+      (or (gethash form *symbol-translations*)
+          form)
+      form))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signals ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun signal-symbol-use-in-form (form)
   (labels ((signal-for-symbol (sym)
              (unless (or (null (symbol-package sym))
                          (member (symbol-package sym)
                                  (mapcar #'find-package '(:keyword :cl))))
-               (signal-user (canonical-package-name (symbol-package sym)) 'defpackage))))
+               (signal-user (canonical-package-name (symbol-package sym))
+                            'defpackage))))
     (cond ((symbolp form) (signal-for-symbol form))
           ((consp form)
-           (loop for (car . cdr) on form
-                 do (signal-symbol-use-in-form car)
-                 if (symbolp cdr)
-                   do (signal-for-symbol cdr))))))
+           (loop :for (car . cdr) :on form
+                 :do (signal-symbol-use-in-form car)
+                 :if (symbolp cdr)
+                   :do (signal-for-symbol cdr))))))
 
 (defun signal-possible-special-variable-use-in-form (form)
   (labels ((signal-for-symbol (sym)
@@ -31,10 +59,10 @@
     (cond ((symbolp form)
            (signal-for-symbol form))
           ((consp form)
-           (loop for (car . cdr) on form
-                 do (signal-possible-special-variable-use-in-form car)
-                 if (symbolp cdr)
-                   do (signal-for-symbol cdr))))))
+           (loop :for (car . cdr) :on form
+                 :do (signal-possible-special-variable-use-in-form car)
+                 :if (symbolp cdr)
+                   :do (signal-for-symbol cdr))))))
 
 (defun signal-new-internal-symbols ()
   (when *previous-package*
@@ -55,22 +83,33 @@
      (signal-user ',name 'define-symbol-macro)
      (setf ,expression ,new-value)))
 
-(defmacro symbol-macroify (operator name &rest args &environment env)
-  (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-" operator))))
-    `(progn
-       (define-symbol-macro ,name ,new-name)
-       ,(macroexpand `(,operator ,new-name ,@args) env))))
+(defun signal-provider (name form-type &optional (*current-dependency-state*
+                                                  *current-dependency-state*))
+  (when (and *current-dependency-state*
+             *current-component*
+             ;; If we're using SBCL, we may need to filter out occasional bogus
+             ;; provisions of symbols from the SB-IMPL package.  (msteele)
+             #+sbcl(not (and (symbolp name)
+                             (eql (symbol-package name)
+                                  (find-package "SB-IMPL")))))
+    (with-slots (providers component-counter) *current-dependency-state*
+       (push (list component-counter *current-component*)
+             (gethash (make-form name form-type) providers))))
+  (values))
 
-(defmacro define-symbol-alias (new-symbol ansi-symbol)
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (when (and (boundp '*symbol-translations*) (hash-table-p *symbol-translations*))
-       (setf (gethash ',new-symbol *symbol-translations*) ',ansi-symbol))))
+(defun signal-user (name form-type &optional (*current-dependency-state*
+                                              *current-dependency-state*))
+  (when (and *current-dependency-state* *current-component*)
+    (with-slots (users component-counter) *current-dependency-state*
+       (setf (gethash *current-component* users)
+             (gethash *current-component* users
+                      (make-hash-table :test #'equal)))
+       (setf (gethash (make-form name form-type)
+                      (gethash *current-component* users))
+             component-counter)))
+  (values))
 
-(defun unalias-symbol (form)
-  (if (boundp '*symbol-translations*)
-      (or (gethash form *symbol-translations*)
-          form)
-      form))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Instrumentation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun parse-body (body &key (ignore-multiple-docstrings t) whole)
   ;; Used with kind permission by Tobias C. Rittweiler.
@@ -130,21 +169,21 @@ keeping declarations intact."
                (let ((feature-presentp (not (null (member x *features*)))))
                  (signal-feature feature-presentp x)
                  feature-presentp)))
-           (guts (stream not-p)
-             (unless (if (let ((*package* (find-package :keyword))
-                               (*read-suppress* nil))
-                           (featurep (read stream t nil t)))
-                         (not not-p)
-                         not-p)
-               (let ((*read-suppress* t))
-                 (read stream t nil t)))
-             (values)))
-    (defun instrumented-sharp+ (stream subchar numarg)
-      (declare (ignore numarg subchar))
-      (guts stream nil))
-    (defun instrumented-sharp- (stream subchar numarg)
-      (declare (ignore numarg subchar))
-      (guts stream t)))
+         (guts (stream not-p)
+           (unless (if (let ((*package* (find-package :keyword))
+                             (*read-suppress* nil))
+                         (featurep (read stream t nil t)))
+                       (not not-p)
+                       not-p)
+             (let ((*read-suppress* t))
+               (read stream t nil t)))
+           (values)))
+  (defun instrumented-sharp+ (stream subchar numarg)
+    (declare (ignore numarg subchar))
+    (guts stream nil))
+  (defun instrumented-sharp- (stream subchar numarg)
+    (declare (ignore numarg subchar))
+    (guts stream t)))
 
 (defun instrumented-sharpquote (stream subchar numarg)
   (declare (ignore subchar numarg))
@@ -162,12 +201,10 @@ keeping declarations intact."
   ;; TODO: #.
   readtable)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun does-not-macroexpand ()
   (values nil nil))
-
-(defun debug-print (string value)
-  (format *debug-io* ";; D: ~A ~S~%" string value)
-  value)
 
 (defmacro does-macroexpand
     ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
@@ -218,6 +255,8 @@ keeping declarations intact."
           (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
             expanded)))
     (funcall *old-macroexpand-hook* fun form env)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;; The actual groveling part.
 
@@ -348,23 +387,29 @@ after operating on a component).")
     (return-from recompute-dependencies-for (values nil :no-state)))
   (let* ((state *current-dependency-state*)
          (c-deps (slot-value state 'component-dependencies))
-         (s-deps (setf (gethash (asdf:component-system component)
-                                (slot-value state 'system-dependencies))
-                       (gethash (asdf:component-system component)
-                                (slot-value state 'system-dependencies)
-                                (make-hash-table))))
+         (s-deps (if *non-asdf-p* nil
+                     (setf (gethash (asdf:component-system component)
+                                    (slot-value state 'system-dependencies))
+                           (gethash (asdf:component-system component)
+                                    (slot-value state 'system-dependencies)
+                                    (make-hash-table)))))
          (c-dep-uniqueness (make-hash-table)))
-    (setf (gethash component c-deps) nil)
+    (unless *non-asdf-p*
+      (setf (gethash component c-deps) nil))
     (compute-dependencies-for-component
      component state
      :generator (lambda (dep-c)
-                  ;; poor (in computation time) man's pushnew:
-                  (unless (gethash dep-c c-dep-uniqueness)
-                    (setf (gethash dep-c c-dep-uniqueness) t)
-                    (push dep-c (gethash component c-deps))
-                    ;; XXX: not sure if this will DTRT for re-groveling,
-                    ;; but that's secondary right now.
-                    (setf (gethash (asdf:component-system dep-c) s-deps) t))))))
+                  (if *non-asdf-p*
+                      (unless (equal dep-c component)
+                        (pushnew dep-c (gethash component c-deps)))
+                      ;; poor (in computation time) man's pushnew:
+                      (unless (gethash dep-c c-dep-uniqueness)
+                        (setf (gethash dep-c c-dep-uniqueness) t)
+                        (push dep-c (gethash component c-deps))
+                        ;; XXX: not sure if this will DTRT for re-groveling,
+                        ;; but that's secondary right now.
+                        (setf (gethash (asdf:component-system dep-c) s-deps)
+                              t)))))))
 
 (defun cached-component-dependencies (state component)
   (gethash component (slot-value state 'component-dependencies)))
@@ -380,26 +425,6 @@ after operating on a component).")
              (get-universal-time))
        (recompute-dependencies-for ,component))))
 
-(defun signal-provider (name form-type &optional (*current-dependency-state*
-                                                  *current-dependency-state*))
-  (when (and *current-dependency-state* *current-component*)
-    (with-slots (providers component-counter) *current-dependency-state*
-       (push (list component-counter *current-component*)
-             (gethash (make-form name form-type) providers))))
-  (values))
-
-(defun signal-user (name form-type &optional (*current-dependency-state*
-                                              *current-dependency-state*))
-  (when (and *current-dependency-state* *current-component*)
-    (with-slots (users component-counter) *current-dependency-state*
-       (setf (gethash *current-component* users)
-             (gethash *current-component* users
-                      (make-hash-table :test #'equal)))
-       (setf (gethash (make-form name form-type)
-                      (gethash *current-component* users))
-             component-counter)))
-  (values))
-
 (defun get-usage-of (component state)
   (with-slots (users) state
      (or (gethash component users)
@@ -411,21 +436,21 @@ after operating on a component).")
 
 (defun generate-form-providers (form state &key before generator)
   (with-slots (providers) state
-     (loop for (unreliable-count component) in (gethash form providers)
-           for count = (or (get-counter-of component state) -1)
-           when (and component (or (null before) (> before count)))
-             do (funcall generator component))))
+    (loop :for (unreliable-count component) :in (gethash form providers)
+          :for count = (or (get-counter-of component state) -1)
+          :when (and component (or (null before) (> before count)))
+            :do (funcall generator component))))
 
 ;;; generating the dependency info
 
 (defun compute-dependencies-for-component (component state
                                    &key generator)
   (let ((component-counter (get-counter-of component state)))
-    (loop for form being the hash-key of (get-usage-of component state)
-          do (generate-form-providers
-                      form state
-                      :before component-counter
-                      :generator generator))
+    (loop :for form :being :the :hash-key :of (get-usage-of component state)
+          :do (generate-form-providers
+                   form state
+                   :before (if *non-asdf-p* nil component-counter)
+                   :generator generator))
     (values)))
 
 (defun make-dependency-space (component state dependency-space)
@@ -763,3 +788,41 @@ after operating on a component).")
                                 *old-macroexpand-hook*
                                 *macroexpand-hook*)))
     (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun print-big-ol-dependency-report (&key (state *current-dependency-state*)
+                                            (stream t))
+  (let ((comp-deps (slot-value state 'component-dependencies))
+        (providers (slot-value state 'providers))
+        (users (slot-value state 'users)))
+    ;; Print a summary of which files depend on which other files and why.
+    (loop :for comp :being :the :hash-keys :in comp-deps
+          :using (:hash-value deps) :do
+       (progn
+         (format stream "~&File ~S depends on:~%" comp)
+         (dolist (dep deps)
+           (format stream "    file ~S because of:~%" dep)
+           (loop :for thing :being :the :hash-keys
+                 :in (gethash comp users)
+                 :if (loop :for (counter provider)
+                           :in (gethash thing providers)
+                           :if (equal provider dep) :do (return t)
+                           :finally (return nil)) :do
+              (format stream "        ~{~S  (~S)~}~%" thing)))))
+    ;; Print a summary of any cyclic dependencies, using DFS to find cycles.
+    (format stream "~&Dependency cycles:~%")
+    (loop :with expanded = nil
+          :with stack = (loop :for comp :being :the :hash-keys :in comp-deps
+                              :collecting (list comp))
+          :until (null stack)
+          :for chain = (pop stack)
+          :for comp = (car chain)
+          :unless (member comp expanded :test #'equal) :do
+       (push comp expanded)
+       (dolist (dep (gethash comp comp-deps))
+         (if (member dep chain :test #'equal)
+             (format stream "    ~S~%" (reverse chain))
+             (push (cons dep chain) stack))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
