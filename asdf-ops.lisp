@@ -1,3 +1,5 @@
+#+xcvb (module (:depends-on ("grovel")))
+
 (cl:in-package #:asdf-dependency-grovel)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)

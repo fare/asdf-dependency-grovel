@@ -1,3 +1,5 @@
+#+xcvb (module ())
+
 (cl:defpackage #:asdf-dependency-grovel
   (:use #:cl)
   (:export #:reload

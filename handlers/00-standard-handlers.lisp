@@ -9,6 +9,8 @@
 ;;  * deftype - we can signal that it was provided, but have to walk
 ;;    declarations in def* and generally almost /everwhere/. not fun.
 
+#+xcvb (module (:depends-on ("grovel")))
+
 (in-package :asdf-dependency-grovel)
 
 (defmacro define-macroexpand-handlers ((form &key

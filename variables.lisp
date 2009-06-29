@@ -1,3 +1,5 @@
+#+xcvb (module (:depends-on ("package")))
+
 (cl:in-package #:asdf-dependency-grovel)
 
 (defvar *non-asdf-p* nil
