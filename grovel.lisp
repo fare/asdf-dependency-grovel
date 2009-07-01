@@ -1,7 +1,7 @@
 ;;; ADSF dependency groveler using macroexpand-hook. Fairly precise,
 ;;; at least for the mcclim system.
 
-#+xcvb (module (:depends-on ("variables" "asdf-ops")))
+#+xcvb (module (:depends-on ("variables")))
 
 (cl:in-package #:asdf-dependency-grovel)
 
