@@ -1,7 +1,7 @@
 ;;; ADSF dependency groveler using macroexpand-hook. Fairly precise,
 ;;; at least for the mcclim system.
 
-#+xcvb (module (:depends-on ("variables")))
+#+xcvb (module (:depends-on ("variables" "asdf-ops")))
 
 (cl:in-package #:asdf-dependency-grovel)
 
@@ -13,12 +13,13 @@
   (format *debug-io* ";; D: ~A ~S~%" string value)
   value)
 
+(eval-when (:compile-toplevel :load-toplevel)
 (defun canonical-package-name (package-designator)
   (intern (typecase package-designator
             (package (package-name package-designator))
             (t (string package-designator)))
           :asdf-dependency-grovel.packages))
-
+)
 (defmacro symbol-macroify (operator name &rest args &environment env)
   (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-"
                                    operator))))

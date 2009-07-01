@@ -30,10 +30,10 @@
 (defsystem asdf-dependency-grovel
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
-               (:file "grovel" :depends-on ("package" "variables"))
+               (:file "asdf-ops" :depends-on ("package" "variables")
+               (:file "grovel" :depends-on ("package" "variables" "asdf-ops"))
                (grovel-handlers "handlers" :pathname #p"handlers/"
-                                :depends-on ("grovel"))
-               (:file "asdf-ops" :depends-on ("package" "variables" "grovel"))))
+                                :depends-on ("grovel")))))
 
 (defmethod perform :after ((op load-op) (c (eql (find-system :asdf-dependency-grovel))))
   (push :asdf-dependency-grovel *features*))

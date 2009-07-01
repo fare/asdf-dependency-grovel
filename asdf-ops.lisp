@@ -1,4 +1,4 @@
-#+xcvb (module (:depends-on ("grovel")))
+#+xcvb (module (:depends-on ("package" "variables")))
 
 (cl:in-package #:asdf-dependency-grovel)
 
