@@ -9,17 +9,20 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utility Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Currently unused.
 (defun debug-print (string value)
   (format *debug-io* ";; D: ~A ~S~%" string value)
   value)
 
 (eval-when (:compile-toplevel :load-toplevel)
-(defun canonical-package-name (package-designator)
-  (intern (typecase package-designator
-            (package (package-name package-designator))
-            (t (string package-designator)))
-          :asdf-dependency-grovel.packages))
-)
+  ;; Used in a number of places, but not exported.
+  (defun canonical-package-name (package-designator)
+    (intern (typecase package-designator
+              (package (package-name package-designator))
+              (t (string package-designator)))
+            :asdf-dependency-grovel.packages)))
+
+;; Used only by the defconstant handler.
 (defmacro symbol-macroify (operator name &rest args &environment env)
   (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-"
                                    operator))))
@@ -27,12 +30,14 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
+;; Exists only to be exported.
 (defmacro define-symbol-alias (new-symbol ansi-symbol)
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (when (and (boundp '*symbol-translations*)
                 (hash-table-p *symbol-translations*))
        (setf (gethash ',new-symbol *symbol-translations*) ',ansi-symbol))))
 
+;; Used only by instrumenting-macroexpand-hook.
 (defun unalias-symbol (form)
   (if (boundp '*symbol-translations*)
       (or (gethash form *symbol-translations*)
@@ -77,15 +82,6 @@
   (clrhash *previously-interned-symbols*)
   (setf *previous-package* nil))
 
-(defun signal-symbol-macroexpansion (name expansion)
-  (signal-user name 'define-symbol-macro)
-  expansion)
-
-(defsetf signal-symbol-macroexpansion (name expression) (new-value)
-  `(progn
-     (signal-user ',name 'define-symbol-macro)
-     (setf ,expression ,new-value)))
-
 (defun signal-provider (name form-type &optional (*current-dependency-state*
                                                   *current-dependency-state*))
   (when (and *current-dependency-state*
@@ -102,7 +98,9 @@
 
 (defun signal-user (name form-type &optional (*current-dependency-state*
                                               *current-dependency-state*))
-  (when (and *current-dependency-state* *current-component*)
+  (when (and *current-dependency-state* *current-component*
+              ;; FIXME defvar is problematic; turn it off for non-ASDF for now
+             (not (and *non-asdf-p* (eql form-type 'defvar))))
     (with-slots (users component-counter) *current-dependency-state*
        (setf (gethash *current-component* users)
              (gethash *current-component* users
@@ -112,8 +110,20 @@
              component-counter)))
   (values))
 
+;; These two provide support for symbol macros.  The former is used by the
+;; define-symbol-macro handler, and the second must exist in case someone uses
+;; setf on an instrumented symbol macro.
+(defun signal-symbol-macroexpansion (name expansion)
+  (signal-user name 'define-symbol-macro)
+  expansion)
+(defsetf signal-symbol-macroexpansion (name expression) (new-value)
+  `(progn
+     (signal-user ',name 'define-symbol-macro)
+     (setf ,expression ,new-value)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Instrumentation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Used only by instrument-defun-body.
 (defun parse-body (body &key (ignore-multiple-docstrings t) whole)
   ;; Used with kind permission by Tobias C. Rittweiler.
   ;; C.f. CLHS 1.4.1.2.1 and 3.4.11.
@@ -134,6 +144,7 @@
    :finish
      (return (values body (nreverse decls) doc))))
 
+;; Used by several handlers (but not exported).
 (defun instrument-defun-body (body form)
   "Insert FORM into list of defun body forms BODY such that the
 return value of BODY is the same as it would be without FORM,
@@ -142,6 +153,7 @@ keeping declarations intact."
       (parse-body body :ignore-multiple-docstrings nil)
     `(,@decls ,doc ,form ,@(or body (list nil)))))
 
+;; Used only by call-with-dependency-tracking in asdf-ops.lisp.
 (defmacro noticing-*feature*-changes (&rest body)
   ;; naive implementation, doesn't really deal with removed features
   (let ((old-features (gensym))
@@ -153,7 +165,6 @@ keeping declarations intact."
                 (signal-provider ,new-feature 'feature))
               (dolist (,removed-feature (set-difference ,old-features *features*))
                 (signal-provider ,removed-feature 'removed-feature))))))
-
 
 (labels ((signal-feature (presentp feature)
            (signal-user feature
@@ -220,10 +231,10 @@ keeping declarations intact."
 
 ;; Much like `does-macroexpand', but takes an additional `epilogue' parameter
 ;; that should be a list of forms.  These forms will be inserted after the
-;; expanded `new-macro-body' within a progn.  Make sure that the last form in
-;; `epilogue' returns whatever the macro would have returned.  We'd like to
-;; just use multiple-value-prog1 instead of progn, but that doesn't necessarily
-;; preserve top-level-ness.  (msteele)
+;; expanded `new-macro-body' within a progn.  The caller must make sure that
+;; the last form in `epilogue' returns whatever the macro would have returned.
+;; We'd like to just use multiple-value-prog1 instead of progn, but that
+;; doesn't necessarily preserve top-level-ness.  (msteele)
 (defmacro does-macroexpand-with-epilogue
     ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
      new-macro-body epilogue)
@@ -258,6 +269,14 @@ keeping declarations intact."
           (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
             expanded)))
     (funcall *old-macroexpand-hook* fun form env)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Groveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmacro with-groveling-macroexpand-hook (&body body)
+  ;; Needs to happen later, else we get problems with CLOS:
+  `(let ((*old-macroexpand-hook* *macroexpand-hook*)
+         (*macroexpand-hook* #'instrumenting-macroexpand-hook))
+     ,@body))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -350,22 +369,27 @@ their :additional-dependencies."
     (t
      (class-name (class-of component)))))
 
+;; Quick hack: some of these hash tables have been set to use equal instead of
+;; eql in order to support non-ASDF groveling.  This makes things slower.
+;; However, I have in mind some ideas for how to reorganize how
+;; dependency-state works that will allow us to switch back to using eql;
+;; hopefully I can do that a little later on.  (msteele)
 (defclass dependency-state ()
      ((order-table
-       :initform (make-hash-table :test #'eql)
+       :initform (make-hash-table :test #'equal) ;; was eql
        :documentation "maps components to their component-counter")
       (providers
        :initform (make-hash-table :test #'equal)
        :documentation "maps form types and names to the defining
        component and their component-counter.")
       (users
-       :initform (make-hash-table :test #'eql)
+       :initform (make-hash-table :test #'equal) ;; was eql
        :documentation "maps components to the forms they need.")
       (component-counter
        :initform 0
        :documentation "counter to order the dependencies")
       (component-dependencies
-       :initform (make-hash-table :test #'eql)
+       :initform (make-hash-table :test #'equal) ;; was eql
        :documentation "Maps components to their dependencies (recomputed after
 operating on a component).")
       (system-dependencies
@@ -379,7 +403,9 @@ after operating on a component).")
 (defun make-form (name form-type)
   (list name form-type))
 
-(defun note-operating-on-component (component &optional (*current-dependency-state* *current-dependency-state*))
+(defun note-operating-on-component (component &optional
+                                    (*current-dependency-state*
+                                     *current-dependency-state*))
   (when *current-dependency-state*
     (with-slots (component-counter order-table) *current-dependency-state*
        (unless (gethash component order-table)
@@ -397,14 +423,18 @@ after operating on a component).")
                                     (slot-value state 'system-dependencies)
                                     (make-hash-table)))))
          (c-dep-uniqueness (make-hash-table)))
-    (unless *non-asdf-p*
-      (setf (gethash component c-deps) nil))
+    (if *non-asdf-p*
+        ;; For non-ASDF groveling, do c-deps.setdefault(component, nil).
+        (setf (gethash component c-deps) (gethash component c-deps nil))
+        ;; For ASDF groveling, do c-deps[component] = nil.
+        (setf (gethash component c-deps) nil))
     (compute-dependencies-for-component
      component state
      :generator (lambda (dep-c)
                   (if *non-asdf-p*
                       (unless (equal dep-c component)
-                        (pushnew dep-c (gethash component c-deps)))
+                        (pushnew dep-c (gethash component c-deps)
+                                 :test #'equal))
                       ;; poor (in computation time) man's pushnew:
                       (unless (gethash dep-c c-dep-uniqueness)
                         (setf (gethash dep-c c-dep-uniqueness) t)
@@ -576,12 +606,6 @@ after operating on a component).")
                                              'suspected-variables)))
      ,@body))
 
-(defmacro with-groveling-macroexpand-hook (&body body)
-  ;; Needs to happen later, else we get problems with CLOS:
-  `(let ((*old-macroexpand-hook* *macroexpand-hook*)
-         (*macroexpand-hook* #'instrumenting-macroexpand-hook))
-     ,@body))
-
 (defun read-definition-from-asd (pathname)
   (with-open-file (f pathname)
     (let ((package (asdf::make-temporary-package)))
@@ -706,6 +730,11 @@ after operating on a component).")
         (output-component-file stream deps))
       state)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Regroveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; This section is stuff that's only used for re-grovel-dependencies, which
+;; exists only to be exported.
+
 (defun dependency-op-done-p (component)
   (let* ((input-files (asdf:input-files
                        (make-instance 'asdf:compile-op)
@@ -807,9 +836,17 @@ after operating on a component).")
          (with-groveling-macroexpand-hook
            (load ,file))))))
 
+(defmacro instrumented-compile-file (file &rest args)
+  (let ((temp (gensym)))
+    `(let ((,temp ,file))
+       (operating-on-component (,temp)
+         (with-groveling-macroexpand-hook
+           (compile-file ,file ,@args))))))
+
 (defun print-big-ol-dependency-report (&key (state *current-dependency-state*)
                                             (stream t))
-  (let ((comp-deps (slot-value state 'component-dependencies))
+  (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
+        (comp-deps (slot-value state 'component-dependencies))
         (providers (slot-value state 'providers))
         (users (slot-value state 'users)))
     ;; Print a summary of which files depend on which other files and why.
@@ -840,5 +877,123 @@ after operating on a component).")
          (if (member dep chain :test #'equal)
              (format stream "    ~S~%" (reverse chain))
              (push (cons dep chain) stack))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; The below code (and some comments) were copied wholesale from the SBCL
+;; source code for the load and load-as-source functions, and then modified.
+;; It's definitely still in "quick hack" status.
+
+#+sbcl
+(defun hardcore-instrumented-load (pathspec &key
+                                   (verbose *load-verbose*)
+                                   (print *load-print*)
+                                   (if-does-not-exist t)
+                                   (external-format :default))
+  (labels ((load-stream (stream filename)
+             (let* (;; Bindings required by ANSI.
+                    (*readtable* *readtable*)
+                    (*package* (sb-int:sane-package))
+                    ;; FIXME: we should probably document the circumstances
+                    ;; where *LOAD-PATHNAME* and *LOAD-TRUENAME* aren't
+                    ;; pathnames during LOAD.  ANSI makes no exceptions here.
+                    (*load-pathname* (handler-case (pathname stream)
+                                       ;; FIXME: it should probably be a type
+                                       ;; error to try to get a pathname for a
+                                       ;; stream that doesn't have one, but I
+                                       ;; don't know if we guarantee that.
+                                       (error () nil)))
+                    (*load-truename* (when *load-pathname*
+                                       (handler-case (truename stream)
+                                         (file-error () nil))))
+                    ;; Bindings used internally.
+                    (sb-fasl::*load-depth* (1+ sb-fasl::*load-depth*))
+                    ;; KLUDGE: I can't find in the ANSI spec where it says
+                    ;; that DECLAIM/PROCLAIM of optimization policy should
+                    ;; have file scope. CMU CL did this, and it seems
+                    ;; reasonable, but it might not be right; after all,
+                    ;; things like (PROCLAIM '(TYPE ..)) don't have file
+                    ;; scope, and I can't find anything under PROCLAIM or
+                    ;; COMPILE-FILE or LOAD or OPTIMIZE which justifies this
+                    ;; behavior. Hmm. -- WHN 2001-04-06
+                    (sb-c::*policy* sb-c::*policy*))
+               (return-from hardcore-instrumented-load
+                 (if (equal (stream-element-type stream) '(unsigned-byte 8))
+                     (sb-fasl::load-as-fasl stream verbose print)
+                     (hardcore-instrumented-load-as-source stream filename)))))
+           (hardcore-instrumented-load-as-source (stream filename)
+             (macrolet ((do-sexprs ((sexpr index stream) &body body)
+                          (sb-int:aver (symbolp sexpr))
+                          (sb-int:aver (symbolp index))
+                          (sb-int:with-unique-names (source-info)
+                            (sb-int:once-only ((stream stream))
+                              `(if (handler-case (pathname stream)
+                                     (error () nil))
+                                   (let ((,source-info
+                                          (sb-c::make-file-source-info
+                                           (pathname ,stream)
+                                           (stream-external-format ,stream))))
+                                     (setf (sb-c::source-info-stream
+                                            ,source-info) ,stream)
+                                     (sb-c::do-forms-from-info
+                                         ((,sexpr current-index) ,source-info)
+                                       (let ((,index current-index))
+                                         ,@body)))
+                                   (do ((,index 0 (1+ ,index))
+                                        (,sexpr
+                                         (read ,stream nil sb-int:*eof-object*)
+                                         (read ,stream nil sb-int:*eof-object*)))
+                                       ((eq ,sexpr *eof-object*))
+                                     ,@body))))))
+               (do-sexprs (sexpr i stream)
+                 (operating-on-component ((list filename i))
+                   (with-groveling-macroexpand-hook
+                     (eval sexpr))))
+               t)))
+    (when (streamp pathspec)
+      (return-from hardcore-instrumented-load (load-stream pathspec
+                                                           "<stream>")))
+    (let ((pathname (pathname pathspec)))
+      (with-open-stream
+          (stream (or (open pathspec :element-type '(unsigned-byte 8)
+                            :if-does-not-exist nil)
+                      (when (null (pathname-type pathspec))
+                        (let ((defaulted-pathname
+                               (sb-fasl::probe-load-defaults pathspec)))
+                          (if defaulted-pathname
+                              (progn (setq pathname defaulted-pathname)
+                                     (open pathname
+                                           :if-does-not-exist
+                                           (if if-does-not-exist :error nil)
+                                           :element-type '(unsigned-byte 8))))))
+                      (if if-does-not-exist
+                          (error 'simple-file-error
+                                 :pathname pathspec
+                                 :format-control
+                                 "~@<Couldn't load ~S: file does not exist.~@:>"
+                                 :format-arguments (list pathspec)))))
+        (unless stream
+          (return-from hardcore-instrumented-load nil))
+
+        (let* ((header-line (make-array
+                             (length sb-fasl::*fasl-header-string-start-string*)
+                             :element-type '(unsigned-byte 8))))
+          (read-sequence header-line stream)
+          (if (mismatch header-line sb-fasl::*fasl-header-string-start-string*
+                        :test #'(lambda (code char) (= code (char-code char))))
+              (let ((truename (probe-file stream)))
+                (when (and truename
+                           (string= (pathname-type truename)
+                                    sb-fasl::*fasl-file-type*))
+                  (error 'fasl-header-missing
+                         :stream (namestring truename)
+                         :fhsss header-line
+                         :expected sb-fasl::*fasl-header-string-start-string*)))
+              (progn
+                (file-position stream :start)
+                (return-from hardcore-instrumented-load
+                  (load-stream stream pathname))))))
+      (with-open-file (stream pathname :external-format external-format)
+        (load-stream stream pathname)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
