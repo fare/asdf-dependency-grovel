@@ -13,8 +13,8 @@
            ;; feature set when groveling:
            #:groveling
            ;; Added by msteele:
-           #:instrumented-load #:with-non-asdf-groveling
-           #:print-big-ol-dependency-report))
+           #:instrumented-load #:instrumented-compile-file
+           #:with-non-asdf-groveling #:print-big-ol-dependency-report))
 
 (cl:defpackage #:asdf-dependency-grovel.packages
   (:use))

@@ -251,8 +251,11 @@
 
 (define-macroexpand-handlers (form :environment env) (defconstant)
   (signal-provider (second form) (first form))
-  (does-macroexpand ((macro-function 'symbol-macroify) env)
-    `(symbol-macroify ,@form)))
+  (if *non-asdf-p*
+      ;; FIXME defconstant is problematic; turn it off for non-ASDF for now
+      (does-not-macroexpand)
+      (does-macroexpand ((macro-function 'symbol-macroify) env)
+                        `(symbol-macroify ,@form))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)
