@@ -3,7 +3,7 @@
   (:export #:reload
            #:component-file #:dependency-op #:compare-dependency-op
            #:instrumented-cl-source-file
-           #:define-symbol-alias #:instrumented-module
+           #:instrumented-module
            #:instrumented-component #:additional-initargs
            #:read-component-file #:systems-in-configuration
            #:handle-macroexpansion #:define-macroexpand-handlers

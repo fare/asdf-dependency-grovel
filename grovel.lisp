@@ -7,7 +7,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utility Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defmacro with-gensyms (names &body body)
+;; Used in a few macros; not exported.  Why isn't this a standard CL macro?
+(defmacro with-gensyms ((&rest names) &body body)
   `(let ,(mapcar #'(lambda (name) `(,name (gensym))) names) ,@body))
 
 ;; Currently unused.
@@ -30,20 +31,6 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
-;; Exists only to be exported.
-(defmacro define-symbol-alias (new-symbol ansi-symbol)
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (when (and (boundp '*symbol-translations*)
-                (hash-table-p *symbol-translations*))
-       (setf (gethash ',new-symbol *symbol-translations*) ',ansi-symbol))))
-
-;; Used only by instrumenting-macroexpand-hook.
-(defun unalias-symbol (form)
-  (if (boundp '*symbol-translations*)
-      (or (gethash form *symbol-translations*)
-          form)
-      form))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signals ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun signal-symbol-use-in-form (form)
@@ -57,8 +44,7 @@
           ((consp form)
            (loop :for (car . cdr) :on form
                  :do (signal-symbol-use-in-form car)
-                 :if (symbolp cdr)
-                   :do (signal-for-symbol cdr))))))
+                 :if (symbolp cdr) :do (signal-for-symbol cdr))))))
 
 (defun signal-possible-special-variable-use-in-form (form)
   (labels ((signal-for-symbol (sym)
@@ -69,8 +55,7 @@
           ((consp form)
            (loop :for (car . cdr) :on form
                  :do (signal-possible-special-variable-use-in-form car)
-                 :if (symbolp cdr)
-                   :do (signal-for-symbol cdr))))))
+                 :if (symbolp cdr) :do (signal-for-symbol cdr))))))
 
 (defun signal-new-internal-symbols ()
   (when *previous-package*
@@ -264,9 +249,7 @@ keeping declarations intact."
 (defun instrumenting-macroexpand-hook (fun form env)
   (if (listp form)
     (multiple-value-bind (replacep new-form)
-        (handle-macroexpansion (if *using-constituents* (first form)
-                                   (unalias-symbol (first form)))
-                               form fun env)
+        (handle-macroexpansion (first form) form fun env)
       (unless *using-constituents*
         (signal-symbol-use-in-form form)
         ;; XXX: heuristic, doesn't catch everything:
@@ -405,8 +388,6 @@ operating on a component).")
        :initform (make-hash-table :test #'eql)
        :documentation "Maps systems to their system dependencies (recomputed
 after operating on a component).")
-
-      (symbol-translations :initform (make-hash-table))
       (suspected-variables :initform (make-hash-table))))
 
 (defun make-form (name form-type)
@@ -609,8 +590,6 @@ after operating on a component).")
           (*default-pathname-defaults* ,base-pathname)
           (*grovel-dir-suffix* (get-universal-time))
           ;;(*break-on-signals* 'error)
-          (*symbol-translations* (slot-value *current-dependency-state*
-                                             'symbol-translations))
           (*suspected-variables* (slot-value *current-dependency-state*
                                              'suspected-variables)))
      ,@body))
