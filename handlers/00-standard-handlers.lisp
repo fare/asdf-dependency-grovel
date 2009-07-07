@@ -90,7 +90,8 @@
 
 (define-macroexpand-handlers (form) (defvar defparameter)
   (signal-provider (second form) 'defvar)
-  (setf (gethash (second form) *suspected-variables*) t)
+  (unless *using-constituents*
+    (setf (gethash (second form) *suspected-variables*) t))
   (does-not-macroexpand))
 
 

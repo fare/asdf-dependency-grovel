@@ -7,6 +7,9 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utility Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defmacro with-gensyms (names &body body)
+  `(let ,(mapcar #'(lambda (name) `(,name (gensym))) names) ,@body))
+
 ;; Currently unused.
 (defun debug-print (string value)
   (format *debug-io* ";; D: ~A ~S~%" string value)
@@ -81,30 +84,34 @@
 
 (defun signal-provider (name form-type &optional (*current-dependency-state*
                                                   *current-dependency-state*))
-  (when (and *current-dependency-state*
-             *current-component*
-             ;; If we're using SBCL, we may need to filter out occasional bogus
-             ;; provisions of symbols from the SB-IMPL package.  (msteele)
-             #+sbcl(not (and (symbolp name)
-                             (eql (symbol-package name)
-                                  (find-package "SB-IMPL")))))
-    (with-slots (providers component-counter) *current-dependency-state*
-       (push (list component-counter *current-component*)
-             (gethash (make-form name form-type) providers))))
+  ;; If we're using SBCL, we may need to filter out occasional bogus provisions
+  ;; of symbols from the SB-IMPL package.  (msteele)
+  #+sbcl
+  (when (and (symbolp name)
+             (eql (symbol-package name) (find-package "SB-IMPL")))
+    (return-from signal-provider))
+  (if *using-constituents*
+      (constituent-add-provision (list name form-type) *current-constituent*)
+      (when (and *current-dependency-state* *current-component*)
+        (with-slots (providers component-counter) *current-dependency-state*
+          (push (list component-counter *current-component*)
+                (gethash (make-form name form-type) providers)))))
   (values))
 
 (defun signal-user (name form-type &optional (*current-dependency-state*
                                               *current-dependency-state*))
-  (when (and *current-dependency-state* *current-component*
-              ;; FIXME defvar is problematic; turn it off for non-ASDF for now
-             (not (and *non-asdf-p* (eql form-type 'defvar))))
-    (with-slots (users component-counter) *current-dependency-state*
-       (setf (gethash *current-component* users)
-             (gethash *current-component* users
-                      (make-hash-table :test #'equal)))
-       (setf (gethash (make-form name form-type)
-                      (gethash *current-component* users))
-             component-counter)))
+  (if *using-constituents*
+      (constituent-add-use (list name form-type) *current-constituent*)
+      (when (and *current-dependency-state* *current-component*
+               ;; FIXME defvar is problematic; turn it off for non-ASDF for now
+                 (not (and *non-asdf-p* (eql form-type 'defvar))))
+        (with-slots (users component-counter) *current-dependency-state*
+          (setf (gethash *current-component* users)
+                (gethash *current-component* users
+                         (make-hash-table :test #'equal)))
+          (setf (gethash (make-form name form-type)
+                         (gethash *current-component* users))
+                component-counter))))
   (values))
 
 ;; These two provide support for symbol macros.  The former is used by the
@@ -257,10 +264,13 @@ keeping declarations intact."
 (defun instrumenting-macroexpand-hook (fun form env)
   (if (listp form)
     (multiple-value-bind (replacep new-form)
-        (handle-macroexpansion (unalias-symbol (first form)) form fun env)
-      (signal-symbol-use-in-form form)
-      ;; XXX: heuristic, doesn't catch everything:
-      (signal-possible-special-variable-use-in-form form)
+        (handle-macroexpansion (if *using-constituents* (first form)
+                                   (unalias-symbol (first form)))
+                               form fun env)
+      (unless *using-constituents*
+        (signal-symbol-use-in-form form)
+        ;; XXX: heuristic, doesn't catch everything:
+        (signal-possible-special-variable-use-in-form form))
       (if replacep
           new-form
           (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
@@ -365,6 +375,8 @@ their :additional-dependencies."
     ;; other types get their class name.
     (t
      (class-name (class-of component)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Quick hack: some of these hash tables have been set to use equal instead of
 ;; eql in order to support non-ASDF groveling.  This makes things slower.
@@ -820,6 +832,77 @@ after operating on a component).")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Constituents:
+
+(defmacro with-constituent-groveling (&body body)
+  `(let ((*non-asdf-p* t) ;; TODO remove this eventually
+         (*using-constituents* t) ;; TODO remove this eventually
+         (*features* (adjoin 'groveling *features*))
+         (*constituent-table* (make-hash-table :test #'equal))
+         (*current-constituent* (make-instance 'top-constituent :parent nil)))
+     ,@body))
+
+(defmacro operating-on-file-constituent ((path) &body body)
+  (with-gensyms (path! designator existing-con present-p con)
+    `(progn
+       (assert *constituent-table*)
+       (assert *current-constituent*)
+       (let* ((,path! ,path)
+              (,designator (cons ,path! (constituent-designator
+                                         *current-constituent*)))
+              (,con (multiple-value-bind (,existing-con ,present-p)
+                        (gethash ,designator *constituent-table*)
+                      (if ,present-p ,existing-con
+                          (setf (gethash ,designator *constituent-table*)
+                                (make-instance 'file-constituent
+                                               :parent *current-constituent*
+                                               :path ,path!)))))
+              (*current-constituent* ,con))
+         (assert (equal (constituent-designator ,con) ,designator))
+         ,@body))))
+
+(defmacro operating-on-form-constituent ((index &optional summary) &body body)
+  (with-gensyms (index! designator existing-con present-p con)
+    `(progn
+       (assert *constituent-table*)
+       (assert *current-constituent*)
+       (let* ((,index! ,index)
+              (,designator (cons ,index! (constituent-designator
+                                          *current-constituent*)))
+              (,con (multiple-value-bind (,existing-con ,present-p)
+                        (gethash ,designator *constituent-table*)
+                      (if ,present-p ,existing-con
+                          (setf (gethash ,designator *constituent-table*)
+                                (make-instance 'form-constituent
+                                               :parent *current-constituent*
+                                               :summary ,summary)))))
+              (*current-constituent* ,con))
+         (assert (equal (constituent-designator ,con) ,designator))
+         ,@body))))
+
+(defun print-constituent-dependency-report (&key (stream t))
+  (let ((constituent *current-constituent*))
+    (propagate-constituent constituent)
+    (let ((dependency-table (constituent-dependency-table constituent)))
+
+      (loop :for con :being :the :hash-keys :in dependency-table
+            :using (:hash-value dep-table)
+            :do
+         (progn
+           (format stream "~&c~S~%" (constituent-designator con))
+           (loop :for dep :being :the :hash-keys :in dep-table
+                 :using (:hash-value reasons)
+                 :do
+              (progn
+                (format stream "    d~S~%" (constituent-designator dep))
+                (dolist (reason reasons)
+                  (format stream "        ~{~S  (~S)~}~%" reason))))))
+
+
+      nil))) ;; FIXME write this
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defmacro with-non-asdf-groveling (&body body)
   `(progn
      (setf *non-asdf-p* t)
@@ -827,11 +910,15 @@ after operating on a component).")
        ,@body)))
 
 (defmacro instrumented-load (file)
-  (let ((temp (gensym)))
-    `(let ((,temp ,file))
-       (operating-on-component (,temp)
-         (with-groveling-macroexpand-hook
-           (load ,file))))))
+  (with-gensyms (file!)
+    `(let ((,file! ,file))
+       (if *using-constituents*
+           (operating-on-file-constituent (,file!)
+             (with-groveling-macroexpand-hook
+               (load ,file!)))
+           (operating-on-component (,file!)
+             (with-groveling-macroexpand-hook
+               (load ,file!)))))))
 
 (defmacro instrumented-compile-file (file &rest args)
   (let ((temp (gensym)))

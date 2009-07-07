@@ -1,8 +1,6 @@
 (cl:in-package #:asdf-dependency-grovel)
 
-(defvar *non-asdf-p* nil
-  "When nil, assumes we're groveling ASDF-based code.
-When non-nil, assumes we're groveling non-ASDF-based code.")
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar *macroexpansion-handlers* (make-hash-table :test #'equal))
 
@@ -47,3 +45,24 @@ dependency information should be printed.")
 for instrumented dependency-discovery FASLs.
 When nil, ADG will use the base-pathname of the target system;
 when non-nil, ADG will use that value as a pathname designator for it.")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Added by msteele:
+
+(defvar *non-asdf-p* nil
+  "When nil, assumes we're groveling ASDF-based code.
+When non-nil, assumes we're groveling non-ASDF-based code.")
+
+(defvar *using-constituents* nil
+  "When nil, assumes we're using the old representations.
+When non-nil, assumes we're using constituents.")
+
+(defvar *current-constituent* nil
+  "The lowest-level constituent that we are currently inside.")
+
+(defvar *constituent-table* nil
+  "Hash table mapping constituent designators to constituent objects
+   (initialized by with-constituent-groveling).")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
