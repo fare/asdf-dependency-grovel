@@ -77,6 +77,18 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defgeneric constituent-summary (con)
+  (:documentation "Return a summary of the identity constituent."))
+
+(defmethod constituent-summary ((con constituent))
+  (constituent-designator con))
+
+(defmethod constituent-summary ((con form-constituent))
+  (list (constituent-designator con)
+        (form-constituent-summary con)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun constituent-descendant-p (con1 con2)
   "Return t if con1 is a descendant of con2, nil otherwise."
   (and con1 (or (eql con1 con2)
