@@ -943,7 +943,7 @@ after operating on a component).")
                                         (,sexpr
                                          (read ,stream nil sb-int:*eof-object*)
                                          (read ,stream nil sb-int:*eof-object*)))
-                                       ((eq ,sexpr *eof-object*))
+                                       ((eq ,sexpr sb-int:*eof-object*))
                                      ,@body))))))
                (do-sexprs (sexpr i stream)
                  (operating-on-component ((list filename i))
