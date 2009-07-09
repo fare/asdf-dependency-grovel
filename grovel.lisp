@@ -7,10 +7,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; Used in a few macros; not exported.  Why isn't this a standard CL macro?
-(defmacro with-gensyms ((&rest names) &body body)
-  `(let ,(mapcar #'(lambda (name) `(,name (gensym))) names) ,@body))
-
 ;; Currently unused.
 (defun debug-print (string value)
   (format *debug-io* ";; D: ~A ~S~%" string value)
@@ -58,7 +54,7 @@
   ;; of symbols from the SB-IMPL package.  (msteele)
   #+sbcl
   (when (and (symbolp name)
-             (eql (symbol-package name) (find-package "SB-IMPL")))
+             (eql (symbol-package name) (find-package :sb-impl)))
     (return-from signal-provider))
   (if *using-constituents*
       (when *current-constituent*
@@ -903,6 +899,15 @@ after operating on a component).")
                 (format stream "    d~S~%" (constituent-summary dep))
                 (dolist (reason reasons)
                   (format stream "        ~{~S  (~S)~}~%" reason)))))))))
+
+(defun print-constituent-file-splitting-strategy (&key (stream t))
+  (let ((graph (build-merged-graph *current-constituent*))
+        (*print-pretty* nil))
+    (loop :for dnode :being :each :hash-key :of graph :do
+       (format stream "~&~S~%"
+               (constituent-summary (dnode-parent dnode)))
+       (loop :for con :being :each :hash-key :of (dnode-constituents dnode) :do
+          (format stream "    ~S~%" (constituent-summary con))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
