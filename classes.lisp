@@ -1,5 +1,7 @@
 ;; Classes used by asdf-dependency-grovel.
 
+#+xcvb (module (:depends-on ("variables")))
+
 (cl:in-package #:asdf-dependency-grovel)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
