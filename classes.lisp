@@ -8,10 +8,34 @@
 (defmacro with-gensyms ((&rest names) &body body)
   `(let ,(mapcar #'(lambda (name) `(,name (gensym))) names) ,@body))
 
-;; Another function that I don't know why CL doesn't seem to have.
-(defun pophash (hash-table)
-  (loop :for k :being :the :hash-key :of hash-table :using (:hash-value v)
-     :do (remhash k hash-table) (return (values k v))))
+;; Hash-set abstraction, since CL doesn't seem to have a set datatype.
+(defun make-hashset (&key (test 'eql))
+  "Create a new hashset with the specified test function."
+  (make-hash-table :test test))
+(defun hashset-count (hashset)
+  "Return the number of items in the hashset."
+  (hash-table-count hashset))
+(defun hashset-empty-p (hashset)
+  "Return t if the hashset is empty, nil otherwise."
+  (= 0 (hashset-count hashset)))
+(defun hashset-contains-p (item hashset)
+  "Return t if the item is in the hashset, nil otherwise."
+  (gethash item hashset))
+(defun hashset-add (item hashset)
+  "Add an item to the hashset."
+  (setf (gethash item hashset) t))
+(defun hashset-remove (item hashset)
+  "Remove an item from the hashset."
+  (remhash item hashset))
+(defmacro do-hashset ((item hashset) &body body)
+  "Like dolist, but for hashsets."
+  `(loop :for ,item :being :the :hash-keys :in ,hashset
+      :do (progn ,@body)))
+(defun hashset-pop (hashset)
+  "Remove and return an arbitrary item from the hashset."
+  (do-hashset (k hashset)
+    (hashset-remove k hashset)
+    (return-from hashset-pop k)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -99,6 +123,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro walk-constituents-preorder ((constituent top) &body body)
+  "Like dolist, but visits constituents in a preorder traversal."
   (with-gensyms (visit walk con child)
     `(labels ((,visit (,constituent) ,@body)
               (,walk (,con)
@@ -108,6 +133,7 @@
        (,walk ,top))))
 
 (defmacro walk-constituents-postorder ((constituent top) &body body)
+  "Like dolist, but visits constituents in a postorder traversal."
   (with-gensyms (visit walk con child)
     `(labels ((,visit (,constituent) ,@body)
               (,walk (,con)
@@ -176,31 +202,33 @@
     :reader dnode-parent
     :documentation "The parent of all constituents in this node.")
    (constituents
-    :initform (make-hash-table :test 'eql)
+    :initform (make-hashset :test 'eql)
     :reader dnode-constituents
     :documentation "The set of constituents in this node.")
    (that-depend-on
-    :initform (make-hash-table :test 'eql)
+    :initform (make-hashset :test 'eql)
     :reader dnodes-that-depend-on
     :documentation "The set of nodes that depend on this node.")
    (needs
-    :initform (make-hash-table :test 'eql)
+    :initform (make-hashset :test 'eql)
     :reader dnodes-needed-by
     :documentation "The set of nodes that this node depends on.")))
 
 (defun make-dnode (constituent)
+  "Create a new dnode containing a single constituent."
   (let ((dnode (make-instance 'dnode
                               :parent (constituent-parent constituent))))
-    (setf (gethash constituent (dnode-constituents dnode)) t)
+    (hashset-add constituent (dnode-constituents dnode))
     dnode))
 
 (defun cyclic-reachable-p (start-node end-node)
+  "Return t if `end-node' is cyclic-reachable from `start-node', nil othewise."
   (let* ((parent (dnode-parent start-node))
          (start-state (list start-node nil))
          (stack (list start-state))
-         (visited (make-hash-table :test 'equal)))
+         (visited (make-hashset :test 'equal)))
     (assert (eql parent (dnode-parent end-node)))
-    (setf (gethash start-state visited) t)
+    (hashset-add start-state visited)
     (do () ((null stack) nil) ;; If the stack is emptied, the answer is "no".
       (destructuring-bind (dnode tainted) (pop stack)
         (cond (tainted
@@ -210,52 +238,53 @@
                  (return t))) ;; The answer is "yes".
               ((not (eql (dnode-parent dnode) parent))
                (setf tainted t)))
-        (loop :for child :being :the :hash-keys :in (dnodes-needed-by dnode)
-           :with new-state = (list child tainted)
-           :unless (gethash new-state visited)
-             :do (setf (gethash new-state visited) t)
-                 (push new-state stack))))))
+        (do-hashset (child (dnodes-needed-by dnode))
+          (let ((new-state (list child tainted)))
+            (unless (hashset-contains-p new-state visited)
+              (hashset-add new-state visited)
+              (push new-state stack))))))))
 
 (defun try-to-merge-dnodes (graph dnode1 dnode2)
+  "Either merge the nodes and return t, or do nothing and return nil."
   (assert (eql (dnode-parent dnode1) (dnode-parent dnode2)))
-  (assert (gethash dnode1 graph))
-  (assert (gethash dnode2 graph))
+  (assert (hashset-contains-p dnode1 graph))
+  (assert (hashset-contains-p dnode2 graph))
   (when (or (cyclic-reachable-p dnode1 dnode2)
             (cyclic-reachable-p dnode2 dnode1))
     (return-from try-to-merge-dnodes nil))
-  (loop :for con :being :the :hash-keys :in (dnode-constituents dnode2)
-     :do (setf (gethash con (dnode-constituents dnode1)) t))
-  (loop :for dnode3 :being :the :hash-keys :in (dnodes-needed-by dnode2)
-     :do (remhash dnode2 (dnodes-that-depend-on dnode3))
-         (setf (gethash dnode1 (dnodes-that-depend-on dnode3)) t)
-         (setf (gethash dnode3 (dnodes-needed-by dnode1)) t))
-  (loop :for dnode3 :being :the :hash-keys :in (dnodes-that-depend-on dnode2)
-     :do (remhash dnode2 (dnodes-needed-by dnode3))
-         (setf (gethash dnode1 (dnodes-needed-by dnode3)) t)
-         (setf (gethash dnode3 (dnodes-that-depend-on dnode1)) t))
-  (remhash dnode2 graph)
-  (remhash dnode1 (dnodes-needed-by dnode1))
-  (remhash dnode1 (dnodes-that-depend-on dnode1))
+  (do-hashset (con (dnode-constituents dnode2))
+    (hashset-add con (dnode-constituents dnode1)))
+  (do-hashset (con (dnodes-needed-by dnode2))
+    (hashset-remove dnode2 (dnodes-that-depend-on dnode3))
+    (hashset-add dnode1 (dnodes-that-depend-on dnode3))
+    (hashset-add dnode3 (dnodes-needed-by dnode1)))
+  (do-hashset (con (dnodes-that-depend-on dnode2))
+    (hashset-remove dnode2 (dnodes-needed-by dnode3))
+    (hashset-add dnode1 (dnodes-needed-by dnode3))
+    (hashset-add dnode3 (dnodes-that-depend-on dnode1)))
+  (hashset-remove dnode2 graph)
+  (hashset-remove dnode1 (dnodes-needed-by dnode1))
+  (hashset-remove dnode1 (dnodes-that-depend-on dnode1))
   t)
 
 (defun build-merged-graph (top-constituent)
-  (let ((graph (make-hash-table :test 'eql))
-        (parent-tables nil))
+  (let ((graph (make-hashset :test 'eql))
+        (dnode-sets nil))
     ;; Populate the graph.
     (dolist (file-con (get-file-constituents top-constituent))
-      (let ((parent-table (make-hash-table :test 'eql)))
+      (let ((dnode-set (make-hashset :test 'eql)))
         (dolist (child (constituent-children file-con))
           (let ((dnode (make-dnode child)))
-            (setf (gethash dnode parent-table) t)
-            (setf (gethash dnode graph) t)))
-        (push parent-table parent-tables)))
+            (hashset-add dnode dnode-set)
+            (hashset-add dnode graph)))
+        (push dnode-set dnode-sets)))
     ;; Try to merge nodes from the same parent.
-    (dolist (parent-table (nreverse parent-tables))
-      (do () ((= 0 (hash-table-count parent-table)))
-        (let* ((dnode (pophash parent-table)))
-          (loop :for other :being :each :hash-key :of parent-table
-             :if (try-to-merge-dnodes graph dnode other)
-               :do (remhash other parent-table)))))
+    (dolist (dnode-set (nreverse dnode-sets))
+      (do () ((hashset-empty-p dnode-set))
+        (let* ((dnode1 (hashset-pop dnode-set)))
+          (do-hashset (dnode2 dnode-set)
+            (when (try-to-merge-dnodes graph dnode1 dnode2)
+              (hashset-remove dnode2 dnode-set))))))
     graph))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
