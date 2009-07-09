@@ -172,6 +172,7 @@
                 (destructuring-bind (slot-name &optional slot-init-value
                                           &rest slot-options)
                     (if (listp slot-desc) slot-desc (list slot-desc))
+                  (declare (ignore slot-init-value slot-options))
                   (let* ((slot-name-str (symbol-name slot-name))
                          (accessor-name-str
                           (concatenate 'string prefix slot-name-str)))
@@ -252,12 +253,15 @@
 
 
 (define-macroexpand-handlers (form :environment env) (defconstant)
-  (signal-provider (second form) (first form))
-  (if *non-asdf-p*
+  (let ((symbol (second form)))
+    (signal-provider symbol 'defconstant)
+    (if *non-asdf-p*
       ;; FIXME defconstant is problematic; turn it off for non-ASDF for now
       (does-not-macroexpand)
-      (does-macroexpand ((macro-function 'symbol-macroify) env)
-                        `(symbol-macroify ,@form))))
+      (does-macroexpand-with-epilogue
+       ((macro-function 'symbol-macroify) env)
+       `(symbol-macroify ,@form)
+       `((setf (symbol-value ',symbol) ,symbol) ',symbol)))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)
