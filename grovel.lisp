@@ -7,7 +7,7 @@
 
 ;;; macroexpand hook and helper functions/macros
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utility Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Currently unused.
 (defun debug-print (string value)
@@ -30,85 +30,77 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
-;; Exists only to be exported.
-(defmacro define-symbol-alias (new-symbol ansi-symbol)
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (when (and (boundp '*symbol-translations*)
-                (hash-table-p *symbol-translations*))
-       (setf (gethash ',new-symbol *symbol-translations*) ',ansi-symbol))))
-
 ;; Used only by instrumenting-macroexpand-hook.
-(defun unalias-symbol (form)
-  (if (boundp '*symbol-translations*)
-      (or (gethash form *symbol-translations*)
-          form)
-      form))
+(defmacro walk-symbols ((sym form) &body body)
+  "Visit each symbol in `form' one at a time, bind `sym' to that symbol, and
+   execute the body."
+  (with-gensyms (visit walk node car cdr)
+    `(labels ((,visit (,sym) ,@body)
+              (,walk (,node)
+                (cond ((symbolp ,node)
+                       (,visit ,node))
+                      ((consp ,node)
+                       (loop :for (,car . ,cdr) :on ,node
+                             :do (,walk ,car)
+                             :if (symbolp ,cdr) :do (,visit ,cdr))))))
+       (,walk ,form))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signals ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signaling Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defun signal-symbol-use-in-form (form)
-  (labels ((signal-for-symbol (sym)
-             (unless (or (null (symbol-package sym))
-                         (member (symbol-package sym)
-                                 (mapcar #'find-package '(:keyword :cl))))
-               (signal-user (canonical-package-name (symbol-package sym))
-                            'defpackage))))
-    (cond ((symbolp form) (signal-for-symbol form))
-          ((consp form)
-           (loop :for (car . cdr) :on form
-                 :do (signal-symbol-use-in-form car)
-                 :if (symbolp cdr)
-                   :do (signal-for-symbol cdr))))))
+;; Used all over the place.
+(defun signal-provider (name form-type &optional (*current-dependency-state*
+                                                  *current-dependency-state*))
+  "Signal that symbol `name' of kind `form-type' is being provided by the
+   current component.  For example, (defun foo ...) would signal with name foo
+   and form-type defun."
+  ;; If we're using SBCL, we may need to filter out occasional bogus provisions
+  ;; of symbols from the SB-IMPL package.  (msteele)
+  #+sbcl
+  (when (and (symbolp name)
+             (eql (symbol-package name) (find-package :sb-impl)))
+    (return-from signal-provider))
+  (if *using-constituents*
+      (when *current-constituent*
+        (constituent-add-provision (list name form-type)
+                                   *current-constituent*))
+      (when (and *current-dependency-state* *current-component*)
+        (with-slots (providers component-counter) *current-dependency-state*
+          (push (list component-counter *current-component*)
+                (gethash (make-form name form-type) providers)))))
+  (values))
 
-(defun signal-possible-special-variable-use-in-form (form)
-  (labels ((signal-for-symbol (sym)
-             (when (gethash sym *suspected-variables*)
-               (signal-user sym 'defvar))))
-    (cond ((symbolp form)
-           (signal-for-symbol form))
-          ((consp form)
-           (loop :for (car . cdr) :on form
-                 :do (signal-possible-special-variable-use-in-form car)
-                 :if (symbolp cdr)
-                   :do (signal-for-symbol cdr))))))
+;; Used all over the place.
+(defun signal-user (name form-type &optional (*current-dependency-state*
+                                              *current-dependency-state*))
+  "Signal that symbol `name' of kind `form-type' is being used by the
+   current component.  For example, (with-foo ...) might signal with name
+   with-foo and form-type defmacro."
+  (if *using-constituents*
+      (when *current-constituent*
+        (constituent-add-use (list name form-type)
+                             *current-constituent*))
+      (when (and *current-dependency-state* *current-component*
+               ;; FIXME defvar is problematic; turn it off for non-ASDF for now
+                 (not (and *non-asdf-p* (eql form-type 'defvar))))
+        (with-slots (users component-counter) *current-dependency-state*
+          (setf (gethash *current-component* users)
+                (gethash *current-component* users
+                         (make-hash-table :test #'equal)))
+          (setf (gethash (make-form name form-type)
+                         (gethash *current-component* users))
+                component-counter))))
+  (values))
 
+;; Used by in-package handler and by call-with-dependency-tracking (asdf-ops).
 (defun signal-new-internal-symbols ()
   (when *previous-package*
     (with-package-iterator (next-sym *previous-package* :internal :inherited)
-      (loop for (not-at-end-p symbol) = (multiple-value-list (next-sym))
-            while not-at-end-p
-            do (unless (gethash symbol *previously-interned-symbols*)
-                 (signal-provider symbol 'internal-symbol)))))
+      (loop :for (not-at-end-p symbol) = (multiple-value-list (next-sym))
+            :while not-at-end-p
+            :do (unless (gethash symbol *previously-interned-symbols*)
+                  (signal-provider symbol 'internal-symbol)))))
   (clrhash *previously-interned-symbols*)
   (setf *previous-package* nil))
-
-(defun signal-provider (name form-type &optional (*current-dependency-state*
-                                                  *current-dependency-state*))
-  (when (and *current-dependency-state*
-             *current-component*
-             ;; If we're using SBCL, we may need to filter out occasional bogus
-             ;; provisions of symbols from the SB-IMPL package.  (msteele)
-             #+sbcl(not (and (symbolp name)
-                             (eql (symbol-package name)
-                                  (find-package "SB-IMPL")))))
-    (with-slots (providers component-counter) *current-dependency-state*
-       (push (list component-counter *current-component*)
-             (gethash (make-form name form-type) providers))))
-  (values))
-
-(defun signal-user (name form-type &optional (*current-dependency-state*
-                                              *current-dependency-state*))
-  (when (and *current-dependency-state* *current-component*
-              ;; FIXME defvar is problematic; turn it off for non-ASDF for now
-             (not (and *non-asdf-p* (eql form-type 'defvar))))
-    (with-slots (users component-counter) *current-dependency-state*
-       (setf (gethash *current-component* users)
-             (gethash *current-component* users
-                      (make-hash-table :test #'equal)))
-       (setf (gethash (make-form name form-type)
-                      (gethash *current-component* users))
-             component-counter)))
-  (values))
 
 ;; These two provide support for symbol macros.  The former is used by the
 ;; define-symbol-macro handler, and the second must exist in case someone uses
@@ -218,11 +210,14 @@ keeping declarations intact."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun does-not-macroexpand ()
+  "A handler can return (does-not-macroexpand) to indicate that does not wish
+   to provide any special expansion, and will thus defer to the normal
+   expansion for the macro."
   (values nil nil))
 
-(defmacro does-macroexpand
-    ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
-     new-macro-body)
+(defmacro does-macroexpand ((function env &key (macroexpand-hook
+                                                '*old-macroexpand-hook*))
+                            new-macro-body)
   `(values t (let ((*macroexpand-hook* ,macroexpand-hook))
                ;;(debug-print "Macroexpanding into"
                (funcall *old-macroexpand-hook* ,function
@@ -244,31 +239,54 @@ keeping declarations intact."
                             ,new-macro-body ,env))
                 ,@,epilogue)))
 
-
-(defun handle-macroexpansion (translated-name form function environment)
-  (let ((handler (gethash (list (canonical-package-name (symbol-package translated-name))
-                                (string (symbol-name translated-name)))
+;; Used by instrumenting-macroexpand-hook, and also exported (not sure why).
+(defun handle-macroexpansion (name form function environment)
+  "Handle macroexpansion of a macro called `name' on `form' with macro function
+   `function' in `environment'.  Either dispatch to the appropriate handler, or
+   else simply signal the use of the macro, and provide no special expansion.
+   Return two values: first, a boolean indicating whether any special expansion
+   was done, and second, the special expansion form (or nil if none)."
+  (let ((handler (gethash (list (canonical-package-name (symbol-package name))
+                                (string (symbol-name name)))
                           *macroexpansion-handlers*)))
-    (cond
-      (handler
-       (funcall handler
-                form :function function :environment environment))
-      (t (signal-user (first form) 'defmacro)
-         (does-not-macroexpand)))))
+    (if handler
+        (funcall handler form :function function :environment environment)
+        (progn (signal-user (first form) 'defmacro)
+               (does-not-macroexpand)))))
 
-;;; The hook itself
+;; The hook itself.
 (defun instrumenting-macroexpand-hook (fun form env)
+  "A substitute for `*macroexpand-hook*' that provides the entry into the magic
+   of asdf-dependency-grovel."
   (if (listp form)
-    (multiple-value-bind (replacep new-form)
-        (handle-macroexpansion (unalias-symbol (first form)) form fun env)
-      (signal-symbol-use-in-form form)
-      ;; XXX: heuristic, doesn't catch everything:
-      (signal-possible-special-variable-use-in-form form)
-      (if replacep
-          new-form
-          (let ((expanded (funcall *old-macroexpand-hook* fun form env)))
-            expanded)))
-    (funcall *old-macroexpand-hook* fun form env)))
+      ;; If the form is a list, we're going to do some magic.
+      (progn
+        ;; Step 1: Look over the symbols in the original form, in case we need
+        ;;         to signal a use of defpackage or defvar.
+        (walk-symbols (sym form)
+          ;; If the symbol is in a package other than CL or KEYWORD, we should
+          ;; signal that we're using that package.
+          (let ((package (symbol-package sym)))
+            (unless (or (null package)
+                        (eql package (find-package :cl))
+                        (eql package (find-package :keyword)))
+              (signal-user (canonical-package-name package) 'defpackage)))
+          ;; If the symbol is a variable, we should signal that we're using
+          ;; that variable.
+          ;; XXX: heuristic, doesn't catch everything:
+          (when (and (not *using-constituents*)
+                     (gethash sym *suspected-variables*))
+            (signal-user sym 'defvar)))
+        ;; Step 2: Hand the form over to handle-macroexpansion, which will
+        ;;         dispatch to the appropriate handler.
+        (multiple-value-bind (replacep new-form)
+            (handle-macroexpansion (first form) form fun env)
+          ;; If the handler provided a replacement, use that, otherwise defer
+          ;; to the old macroexpand hook.
+          (if replacep new-form
+              (funcall *old-macroexpand-hook* fun form env))))
+      ;; If the form is not a list, defer to the old macroexpand hook.
+      (funcall *old-macroexpand-hook* fun form env)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Groveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -369,6 +387,8 @@ their :additional-dependencies."
     (t
      (class-name (class-of component)))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; Quick hack: some of these hash tables have been set to use equal instead of
 ;; eql in order to support non-ASDF groveling.  This makes things slower.
 ;; However, I have in mind some ideas for how to reorganize how
@@ -396,8 +416,6 @@ operating on a component).")
        :initform (make-hash-table :test #'eql)
        :documentation "Maps systems to their system dependencies (recomputed
 after operating on a component).")
-
-      (symbol-translations :initform (make-hash-table))
       (suspected-variables :initform (make-hash-table))))
 
 (defun make-form (name form-type)
@@ -600,8 +618,6 @@ after operating on a component).")
           (*default-pathname-defaults* ,base-pathname)
           (*grovel-dir-suffix* (get-universal-time))
           ;;(*break-on-signals* 'error)
-          (*symbol-translations* (slot-value *current-dependency-state*
-                                             'symbol-translations))
           (*suspected-variables* (slot-value *current-dependency-state*
                                              'suspected-variables)))
      ,@body))
@@ -821,7 +837,82 @@ after operating on a component).")
                                 *macroexpand-hook*)))
     (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmacro with-constituent-groveling (&body body)
+  `(let ((*non-asdf-p* t) ;; TODO remove this eventually
+         (*using-constituents* t) ;; TODO remove this eventually
+         (*features* (adjoin 'groveling *features*))
+         (*constituent-table* (make-hash-table :test #'equal))
+         (*current-constituent* (make-instance 'top-constituent :parent nil)))
+     ,@body))
+
+(defmacro operating-on-file-constituent ((path) &body body)
+  (with-gensyms (path! designator existing-con present-p con)
+    `(progn
+       (assert *constituent-table*)
+       (assert *current-constituent*)
+       (let* ((,path! ,path)
+              (,designator (cons ,path! (constituent-designator
+                                         *current-constituent*)))
+              (,con (multiple-value-bind (,existing-con ,present-p)
+                        (gethash ,designator *constituent-table*)
+                      (if ,present-p ,existing-con
+                          (setf (gethash ,designator *constituent-table*)
+                                (make-instance 'file-constituent
+                                               :parent *current-constituent*
+                                               :path ,path!)))))
+              (*current-constituent* ,con))
+         (assert (equal (constituent-designator ,con) ,designator))
+         ,@body))))
+
+(defmacro operating-on-form-constituent ((index &optional summary) &body body)
+  (with-gensyms (index! designator existing-con present-p con)
+    `(progn
+       (assert *constituent-table*)
+       (assert *current-constituent*)
+       (let* ((,index! ,index)
+              (,designator (cons ,index! (constituent-designator
+                                          *current-constituent*)))
+              (,con (multiple-value-bind (,existing-con ,present-p)
+                        (gethash ,designator *constituent-table*)
+                      (if ,present-p ,existing-con
+                          (setf (gethash ,designator *constituent-table*)
+                                (make-instance 'form-constituent
+                                               :parent *current-constituent*
+                                               :summary ,summary)))))
+              (*current-constituent* ,con))
+         (assert (equal (constituent-designator ,con) ,designator))
+         ,@body))))
+
+(defun print-constituent-dependency-report (&key (stream t))
+  (let ((constituent *current-constituent*))
+    (propagate-constituent constituent)
+    (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
+          (dependency-table (constituent-dependency-table constituent)))
+      (loop :for con :being :the :hash-keys :in dependency-table
+            :using (:hash-value dep-table)
+            :do
+         (progn
+           (format stream "~&c~S~%" (constituent-summary con))
+           (loop :for dep :being :the :hash-keys :in dep-table
+                 :using (:hash-value reasons)
+                 :do
+              (progn
+                (format stream "    d~S~%" (constituent-summary dep))
+                (dolist (reason reasons)
+                  (format stream "        ~{~S  (~S)~}~%" reason)))))))))
+
+(defun print-constituent-file-splitting-strategy (&key (stream t))
+  (let ((graph (build-merged-graph *current-constituent*))
+        (*print-pretty* nil))
+    (loop :for dnode :being :each :hash-key :of graph :do
+       (format stream "~&~S~%"
+               (constituent-summary (dnode-parent dnode)))
+       (loop :for con :being :each :hash-key :of (dnode-constituents dnode) :do
+          (format stream "    ~S~%" (constituent-summary con))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro with-non-asdf-groveling (&body body)
   `(progn
@@ -830,11 +921,15 @@ after operating on a component).")
        ,@body)))
 
 (defmacro instrumented-load (file)
-  (let ((temp (gensym)))
-    `(let ((,temp ,file))
-       (operating-on-component (,temp)
-         (with-groveling-macroexpand-hook
-           (load ,file))))))
+  (with-gensyms (file!)
+    `(let ((,file! ,file))
+       (if *using-constituents*
+           (operating-on-file-constituent (,file!)
+             (with-groveling-macroexpand-hook
+               (load ,file!)))
+           (operating-on-component (,file!)
+             (with-groveling-macroexpand-hook
+               (load ,file!)))))))
 
 (defmacro instrumented-compile-file (file &rest args)
   (let ((temp (gensym)))
@@ -845,6 +940,9 @@ after operating on a component).")
 
 (defun print-big-ol-dependency-report (&key (state *current-dependency-state*)
                                             (stream t))
+  (when *using-constituents*
+    (print-constituent-dependency-report :stream stream)
+    (return-from print-big-ol-dependency-report))
   (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
         (comp-deps (slot-value state 'component-dependencies))
         (providers (slot-value state 'providers))
@@ -878,7 +976,22 @@ after operating on a component).")
              (format stream "    ~S~%" (reverse chain))
              (push (cons dep chain) stack))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; Hardcore Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;;
+
+(defun summarize-form (form)
+  (cond ((symbolp form) form)
+        ((and (consp form) (symbolp (car form)))
+         (cond ((null (cdr form)) `(,(car form)))
+               ((and (consp (cdr form)) (symbolp (cadr form)))
+                (if (null (cddr form))
+                    form
+                    `(,(car form) ,(cadr form) cl-user::---)))
+               (t `(,(car form) cl-user::---))))
+        (t cl-user::---)))
+;; The use of cl-user::--- above is terrible gross hack.  The only significance
+;; of it is that it is a symbol that will print without the package name and
+;; that looks sort of like an ellipsis.
+;; TODO Get rid of the preceding terrible gross hack.
 
 ;; The below code (and some comments) were copied wholesale from the SBCL
 ;; source code for the load and load-as-source functions, and then modified.
@@ -945,10 +1058,16 @@ after operating on a component).")
                                          (read ,stream nil sb-int:*eof-object*)))
                                        ((eq ,sexpr sb-int:*eof-object*))
                                      ,@body))))))
-               (do-sexprs (sexpr i stream)
-                 (operating-on-component ((list filename i))
-                   (with-groveling-macroexpand-hook
-                     (eval sexpr))))
+               (if *using-constituents*
+                   (operating-on-file-constituent (filename)
+                     (do-sexprs (sexpr i stream)
+                       (operating-on-form-constituent (i (summarize-form sexpr))
+                         (with-groveling-macroexpand-hook
+                           (eval sexpr)))))
+                   (do-sexprs (sexpr i stream)
+                     (operating-on-component ((list filename i))
+                       (with-groveling-macroexpand-hook
+                         (eval sexpr)))))
                t)))
     (when (streamp pathspec)
       (return-from hardcore-instrumented-load (load-stream pathspec
