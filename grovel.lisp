@@ -981,17 +981,13 @@ after operating on a component).")
 (defun summarize-form (form)
   (cond ((symbolp form) form)
         ((and (consp form) (symbolp (car form)))
-         (cond ((null (cdr form)) `(,(car form)))
+         (cond ((null (cdr form)) (format nil "(~S)" (car form)))
                ((and (consp (cdr form)) (symbolp (cadr form)))
                 (if (null (cddr form))
-                    form
-                    `(,(car form) ,(cadr form) cl-user::---)))
-               (t `(,(car form) cl-user::---))))
-        (t cl-user::---)))
-;; The use of cl-user::--- above is terrible gross hack.  The only significance
-;; of it is that it is a symbol that will print without the package name and
-;; that looks sort of like an ellipsis.
-;; TODO Get rid of the preceding terrible gross hack.
+                    (format nil "(~S ~S)" (car form) (cadr form))
+                    (format nil "(~S ~S ...)" (car form) (cadr form))))
+               (t (format nil "(~S ...)" (car form)))))
+        (t "(...)")))
 
 ;; The below code (and some comments) were copied wholesale from the SBCL
 ;; source code for the load and load-as-source functions, and then modified.
