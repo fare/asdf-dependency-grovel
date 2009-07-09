@@ -2,37 +2,6 @@
 
 (cl:in-package #:asdf-dependency-grovel)
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defclass instrumented-component ()
-       ((translated-name :initarg :translated-name
-                         :reader translated-name)
-        (translated-pathname :initarg :translated-pathname-form
-                             :reader translated-pathname)
-        (output-file-type :initarg :output-file-type
-                          :reader output-file-type)
-        (additional-dependencies :initarg :additional-dependencies
-                                 :initform nil
-                                 :reader additional-dependencies)
-        (overridden-dependencies :initarg :override-dependencies
-                                 :reader overridden-dependencies)
-        (additional-initargs :initarg :additional-initargs
-                             :initform nil
-                             :reader additional-initargs)))
-  (defclass instrumented-cl-source-file (asdf:cl-source-file
-                                         instrumented-component)
-       ())
-  (defclass instrumented-module (asdf:module instrumented-component)
-       ()
-    (:default-initargs :default-component-class 'instrumented-cl-source-file)))
-
-(defmethod additional-initargs :around ((comp instrumented-component))
-  (flet ((slot-when-bound (slot-name initarg)
-           (when (slot-boundp comp slot-name)
-             `(,initarg ,(slot-value comp slot-name)))))
-    `(,@(call-next-method)
-        ,@(slot-when-bound 'translated-name :translated-name)
-        ,@(slot-when-bound 'translated-pathname :translated-pathname-form))))
-
 (defmethod asdf:output-files :around ((op asdf:compile-op) (comp instrumented-cl-source-file))
   "Put instrumented FASL files in a temporary directory relative
 to the base of the system."
@@ -47,12 +16,13 @@ to the base of the system."
     (list
      (if (and (boundp '*old-macroexpand-hook*)
               *old-macroexpand-hook*)
-         (merge-pathnames (make-pathname :directory `(,@(pathname-directory system-base-dir)
-                                                        ,(format nil "asdf-dependency-grovel-tmp-~A"
-                                                                 *grovel-dir-suffix*)
-                                                        ,@dir-component)
-                                         :defaults output-file)
-                          system-base-dir)
+         (merge-pathnames
+          (make-pathname :directory `(,@(pathname-directory system-base-dir)
+                                      ,(format nil "asdf-dependency-grovel-tmp-~A"
+                                               *grovel-dir-suffix*)
+                                      ,@dir-component)
+                         :defaults output-file)
+          system-base-dir)
          output-file))))
 
 (defun call-with-dependency-tracking (comp thunk)
