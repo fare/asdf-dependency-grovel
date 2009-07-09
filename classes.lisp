@@ -177,6 +177,7 @@
     table))
 
 (defun constituent-dependency-table (top)
+  "Create a table mapping constituents to constituents to lists of reasons."
   (let ((provisions (constituent-provision-table top))
         (table (make-hash-table :test 'eql)))
     (walk-constituents-preorder (con top)
@@ -223,8 +224,10 @@
     (hashset-add constituent (dnode-constituents dnode))
     dnode))
 
-(defun cyclic-reachable-p (start-node end-node)
+(defun cyclic-reachable-p (graph start-node end-node)
   "Return t if `end-node' is cyclic-reachable from `start-node', nil othewise."
+  (assert (hashset-contains-p start-node graph))
+  (assert (hashset-contains-p end-node graph))
   (let* ((parent (dnode-parent start-node))
          (start-state (list start-node nil))
          (stack (list start-state))
@@ -241,6 +244,7 @@
               ((not (eql (dnode-parent dnode) parent))
                (setf tainted t)))
         (do-hashset (child (dnodes-needed-by dnode))
+          (assert (hashset-contains-p child graph))
           (let ((new-state (list child tainted)))
             (unless (hashset-contains-p new-state visited)
               (hashset-add new-state visited)
@@ -248,38 +252,56 @@
 
 (defun try-to-merge-dnodes (graph dnode1 dnode2)
   "Either merge the nodes and return t, or do nothing and return nil."
+  (assert (not (eql dnode1 dnode2)))
   (assert (eql (dnode-parent dnode1) (dnode-parent dnode2)))
   (assert (hashset-contains-p dnode1 graph))
   (assert (hashset-contains-p dnode2 graph))
-  (when (or (cyclic-reachable-p dnode1 dnode2)
-            (cyclic-reachable-p dnode2 dnode1))
+  ;; If dnode2 is cyclic-reachable from dnode1 (or vice-versa), we can't merge.
+  (when (or (cyclic-reachable-p graph dnode1 dnode2)
+            (cyclic-reachable-p graph dnode2 dnode1))
     (return-from try-to-merge-dnodes nil))
+  ;; Merge constituents of dnode2 into dnode1.
   (do-hashset (con (dnode-constituents dnode2))
     (hashset-add con (dnode-constituents dnode1)))
-  (do-hashset (con (dnodes-needed-by dnode2))
-    (hashset-remove dnode2 (dnodes-that-depend-on dnode3))
-    (hashset-add dnode1 (dnodes-that-depend-on dnode3))
-    (hashset-add dnode3 (dnodes-needed-by dnode1)))
-  (do-hashset (con (dnodes-that-depend-on dnode2))
+  ;; Nodes that needed dnode2 now need dnode1 instead.
+  (do-hashset (dnode3 (dnodes-that-depend-on dnode2))
     (hashset-remove dnode2 (dnodes-needed-by dnode3))
     (hashset-add dnode1 (dnodes-needed-by dnode3))
     (hashset-add dnode3 (dnodes-that-depend-on dnode1)))
-  (hashset-remove dnode2 graph)
+  ;; Nodes that dnode2 needed are now needed by dnode1 instead.
+  (do-hashset (dnode3 (dnodes-needed-by dnode2))
+    (hashset-remove dnode2 (dnodes-that-depend-on dnode3))
+    (hashset-add dnode1 (dnodes-that-depend-on dnode3))
+    (hashset-add dnode3 (dnodes-needed-by dnode1)))
+  ;; Remove any self edge on dnode1, in case the merging created one.
   (hashset-remove dnode1 (dnodes-needed-by dnode1))
   (hashset-remove dnode1 (dnodes-that-depend-on dnode1))
+  ;; Remove dnode2 from the graph.
+  (hashset-remove dnode2 graph)
   t)
 
 (defun build-merged-graph (top-constituent)
   (let ((graph (make-hashset :test 'eql))
-        (dnode-sets nil))
-    ;; Populate the graph.
+        (dnode-lookup (make-hash-table :test 'eql))
+        (dnode-sets nil)
+        (dependencies (constituent-dependency-table top-constituent)))
+    ;; Populate the graph with nodes.
     (dolist (file-con (get-file-constituents top-constituent))
       (let ((dnode-set (make-hashset :test 'eql)))
         (dolist (child (constituent-children file-con))
           (let ((dnode (make-dnode child)))
+            (setf (gethash child dnode-lookup) dnode)
             (hashset-add dnode dnode-set)
             (hashset-add dnode graph)))
         (push dnode-set dnode-sets)))
+    ;; Populate the nodes with dependencies.
+    (loop :for con1 :being :each :hash-key :in dnode-lookup
+          :using (:hash-value dnode1) :do
+       (loop :for con2 :being :each :hash-key :in (gethash con1 dependencies)
+             :for dnode2 := (gethash con2 dnode-lookup)
+             :when dnode2 :do
+          (hashset-add dnode1 (dnodes-that-depend-on dnode2))
+          (hashset-add dnode2 (dnodes-needed-by dnode1))))
     ;; Try to merge nodes from the same parent.
     (dolist (dnode-set (nreverse dnode-sets))
       (do () ((hashset-empty-p dnode-set))
