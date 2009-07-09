@@ -1,7 +1,7 @@
 ;;; ADSF dependency groveler using macroexpand-hook. Fairly precise,
 ;;; at least for the mcclim system.
 
-#+xcvb (module (:depends-on ("variables")))
+#+xcvb (module (:depends-on ("variables" "classes")))
 
 (cl:in-package #:asdf-dependency-grovel)
 
@@ -987,7 +987,7 @@ after operating on a component).")
                     form
                     `(,(car form) ,(cadr form) cl-user::---)))
                (t `(,(car form) cl-user::---))))
-        (t cl-user::---)))
+        (t 'cl-user::---)))
 ;; The use of cl-user::--- above is terrible gross hack.  The only significance
 ;; of it is that it is a symbol that will print without the package name and
 ;; that looks sort of like an ellipsis.
