@@ -6,6 +6,6 @@
   :supersedes-asdf ("asdf-dependency-grovel")
   :author ("Andreas Fuchs" "Matthew Steele")
   :description "dependency groveler for Common Lisp software"
-  :build-requires ((:build "/asdf"))
+  :build-depends-on ("/asdf")
   :depends-on ("grovel" "asdf-ops" "handlers/00-standard-handlers")
   :build-image nil))
