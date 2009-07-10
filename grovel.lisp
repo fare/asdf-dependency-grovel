@@ -58,9 +58,9 @@
   #+sbcl
   (when (and (symbolp name)
              (eql (symbol-package name) (find-package :sb-impl)))
-    (return-from signal-provider))
+    (return-from signal-provider (values)))
   (if *using-constituents*
-      (when *current-constituent*
+      (when (and *current-constituent* (not (eql form-type 'defvar)))
         (constituent-add-provision (list name form-type)
                                    *current-constituent*))
       (when (and *current-dependency-state* *current-component*)
@@ -76,7 +76,7 @@
    current component.  For example, (with-foo ...) might signal with name
    with-foo and form-type defmacro."
   (if *using-constituents*
-      (when *current-constituent*
+      (when (and *current-constituent* (not (eql form-type 'defvar)))
         (constituent-add-use (list name form-type)
                              *current-constituent*))
       (when (and *current-dependency-state* *current-component*
@@ -93,6 +93,8 @@
 
 ;; Used by in-package handler and by call-with-dependency-tracking (asdf-ops).
 (defun signal-new-internal-symbols ()
+  (when *using-constituents*
+    (return-from signal-new-internal-symbols))
   (when *previous-package*
     (with-package-iterator (next-sym *previous-package* :internal :inherited)
       (loop :for (not-at-end-p symbol) = (multiple-value-list (next-sym))
@@ -891,13 +893,11 @@ after operating on a component).")
     (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
           (dependency-table (constituent-dependency-table constituent)))
       (loop :for con :being :the :hash-keys :in dependency-table
-            :using (:hash-value dep-table)
-            :do
+            :using (:hash-value dep-table) :do
          (progn
            (format stream "~&c~S~%" (constituent-summary con))
            (loop :for dep :being :the :hash-keys :in dep-table
-                 :using (:hash-value reasons)
-                 :do
+                 :using (:hash-value reasons) :do
               (progn
                 (format stream "    d~S~%" (constituent-summary dep))
                 (dolist (reason reasons)
@@ -905,12 +905,18 @@ after operating on a component).")
 
 (defun print-constituent-file-splitting-strategy (&key (stream t))
   (let ((graph (build-merged-graph *current-constituent*))
+        (parent-map (make-hash-table :test 'eql))
         (*print-pretty* nil))
-    (loop :for dnode :being :each :hash-key :of graph :do
-       (format stream "~&~S~%"
-               (constituent-summary (dnode-parent dnode)))
-       (loop :for con :being :each :hash-key :of (dnode-constituents dnode) :do
-          (format stream "    ~S~%" (constituent-summary con))))))
+    (do-hashset (dnode graph)
+      (push dnode (gethash (dnode-parent dnode) parent-map)))
+    (loop :for parent :being :each :hash-key :of parent-map
+          :using (:hash-value dnodes)
+          :when (> (length dnodes) 1) :do
+       (format stream "~&~S~%" (constituent-summary parent))
+       (dolist (dnode dnodes)
+         (format stream "  dnode:~%")
+         (do-hashset (con (dnode-constituents dnode))
+           (format stream "    ~S~%" (constituent-summary con)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -942,6 +948,7 @@ after operating on a component).")
                                             (stream t))
   (when *using-constituents*
     (print-constituent-dependency-report :stream stream)
+    (print-constituent-file-splitting-strategy :stream stream)
     (return-from print-big-ol-dependency-report))
   (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
         (comp-deps (slot-value state 'component-dependencies))

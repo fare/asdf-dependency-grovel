@@ -282,15 +282,23 @@
                                   `(signal-user ',name 'defun))))))
 
 
+;; I think instrumenting lambdas is overkill.  Most of the time, such as when
+;; the lambda is an argument to e.g. mapcar, the instrumentation accomplishes
+;; nothing.  The only time it would seem to help is if one constituent stores a
+;; lambda somewhere, and other uses it, but that case ought to be caught by
+;; e.g. the defparameter handler.  Having lambda instrumentation makes QPX take
+;; a very long time build.  (msteele)
 (define-macroexpand-handlers (form :function fun :environment env) (lambda)
-  (let ((name (gentemp "ASDF-DEPENDENCY-GROVEL-LAMBDA"
-                       '#:asdf-dependency-grovel.lambdas)))
-    (destructuring-bind (l arg-list &rest maybe-body) form
-      (signal-provider name 'defun)
-      (does-macroexpand (fun env)
-        `(,l ,arg-list
-           ,@(instrument-defun-body maybe-body
-                                    `(signal-user ',name 'defun)))))))
+  (if *using-constituents*
+      (does-not-macroexpand)
+      (let ((name (gentemp "ASDF-DEPENDENCY-GROVEL-LAMBDA"
+                           '#:asdf-dependency-grovel.lambdas)))
+        (destructuring-bind (l arg-list &rest maybe-body) form
+          (signal-provider name 'defun)
+          (does-macroexpand (fun env)
+            `(,l ,arg-list
+                 ,@(instrument-defun-body maybe-body
+                                          `(signal-user ',name 'defun))))))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)
