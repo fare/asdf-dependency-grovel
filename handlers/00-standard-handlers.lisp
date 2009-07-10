@@ -19,26 +19,26 @@
                                        (&rest form-names) &body body)
   ;;; TODO: destructuring-bind form?
   `(progn
-     ,@(loop for form-name in form-names
-             for symbol-name = (if (symbolp form-name)
-                                   (symbol-name form-name)
-                                   (string (second form-name)))
-             for pkg-name = (canonical-package-name
-                             (if (symbolp form-name)
-                                 (symbol-package form-name)
-                                 (first form-name)))
-             for fun-name = (intern (format nil "HANDLE-MACROEXPANSION-~A/~A"
-                                            pkg-name symbol-name)
-                                    :asdf-dependency-grovel)
-             collect `(defun ,fun-name
-                          (,form &key
-                           ,@(and functionp `(((:function ,function))))
-                           ,@(and environmentp `(((:environment ,environment))))
-                           &allow-other-keys)
+     ,@(loop :for form-name :in form-names
+             :for symbol-name = (if (symbolp form-name)
+                                    (symbol-name form-name)
+                                    (string (second form-name)))
+             :for pkg-name = (canonical-package-name
+                              (if (symbolp form-name)
+                                  (symbol-package form-name)
+                                  (first form-name)))
+             :for fun-name = (intern (format nil "HANDLE-MACROEXPANSION-~A/~A"
+                                             pkg-name symbol-name)
+                                     :asdf-dependency-grovel)
+             :collect `(defun ,fun-name
+                        (,form &key
+                         ,@(and functionp `(((:function ,function))))
+                         ,@(and environmentp `(((:environment ,environment))))
+                         &allow-other-keys)
                         ,@body)
-             collect `(setf (gethash (list ',pkg-name ',symbol-name)
-                                     *macroexpansion-handlers*)
-                            ',fun-name))))
+             :collect `(setf (gethash (list ',pkg-name ',symbol-name)
+                              *macroexpansion-handlers*)
+                        ',fun-name))))
 
 (defmacro define-simple-macroexpand-handlers (form-var identifier-form
                                               signal-type signal-form-type
@@ -64,13 +64,13 @@
 
 
 (define-macroexpand-handlers (form) (setf)
-  (loop for (setee value) on (cdr form) by #'cddr
-        do (cond
-             ((consp setee)
-              (signal-user (first setee) 'setf))
-             ((and (symbolp setee) (boundp setee))
-              (signal-user setee 'defvar)
-              (signal-provider setee 'defvar))))
+  (loop :for (setee value) :on (cdr form) :by #'cddr
+        :do (cond
+              ((consp setee)
+               (signal-user (first setee) 'setf))
+              ((and (symbolp setee) (boundp setee))
+               (signal-user setee 'defvar)
+               (signal-provider setee 'defvar))))
   (does-not-macroexpand))
 
 
@@ -105,24 +105,25 @@
   (let* ((name (second form))
          (new-expansion
           `(defmethod ,name
-               ,@(loop for (elt . body) on (nthcdr 2 form)
-                       if (not (listp elt))
-                         collect elt into modifiers
-                       else
-                         do (signal-provider  `(,name ,@modifiers ,elt) 'defmethod)
-                         and do
-                           (loop for arg in elt
-                                 when (and (listp arg)
-                                           (symbolp (second arg)))
-                                   do (signal-user (second arg) 'defclass))
-                         and collect elt into modifiers
-                         and collect elt
-                         and append (instrument-defun-body body
-                                               `(signal-user
-                                                       '(,name ,@modifiers)
-                                                       'defmethod))
-                         and do (loop-finish)
-                       collect elt))))
+               ,@(loop :for (elt . body) :on (nthcdr 2 form)
+                       :if (not (listp elt))
+                         :collect elt :into modifiers
+                       :else
+                         :do (signal-provider `(,name ,@modifiers ,elt) 'defmethod)
+                         :and :do
+                           (loop :for arg :in elt
+                                 :when (and (listp arg)
+                                            (symbolp (second arg)))
+                                   :do (signal-user (second arg) 'defclass))
+                         :and :collect elt :into modifiers
+                         :and :collect elt
+                         :and :append (instrument-defun-body
+                                       body
+                                       `(signal-user
+                                         '(,name ,@modifiers)
+                                         'defmethod))
+                         :and :do (loop-finish)
+                       :collect elt))))
     ;; (format *debug-io* "~&~S becomes:~&~S~%~%" form new-expansion)
     (does-macroexpand (fun env :macroexpand-hook *macroexpand-hook*)
       new-expansion)))
@@ -134,14 +135,14 @@
   ;; signal use of direct superclasses/superconditions. Note that we
   ;; declare a dependency only if the direct superclass is already
   ;; defined through the current system definition.
-  (loop for superclass in (third form)
-        do (signal-user superclass (first form))
-        do (signal-user (second form) 'deftype))
-  (loop for slot in (fourth form)
-        for slot-type = (and (consp slot)
-                             (getf (cdr slot) :type))
-        do (when slot-type
-             (signal-user slot-type 'deftype)))
+  (loop :for superclass :in (third form)
+        :do (signal-user superclass (first form))
+        :do (signal-user (second form) 'deftype))
+  (loop :for slot :in (fourth form)
+        :for slot-type = (and (consp slot)
+                              (getf (cdr slot) :type))
+        :do (when slot-type
+              (signal-user slot-type 'deftype)))
   (does-not-macroexpand))
 
 
@@ -218,28 +219,26 @@
                                                     (nthcdr 2 form))))))
            (clause-second-element (clause)
              (list (second clause))))
-    (loop for nickname in (clause-contents :nickname)
-          do (signal-provider nickname 'defpackage))
+    (loop :for nickname :in (clause-contents :nickname)
+          :do (signal-provider nickname 'defpackage))
     ;; signal :uses of packages
-    (loop for use in (append (clause-contents :use)
-                             (clause-contents :import-from
-                                    #'clause-second-element)
-                             (clause-contents :shadowing-import-from
-                                    #'clause-second-element))
-          do (signal-user
-              (canonical-package-name use)
-                    'defpackage))
+    (loop :for use :in (append (clause-contents :use)
+                               (clause-contents :import-from
+                                                #'clause-second-element)
+                               (clause-contents :shadowing-import-from
+                                                #'clause-second-element))
+          :do (signal-user (canonical-package-name use) 'defpackage))
     ;; signal imports of symbols (they need to exist before they can
     ;; be imported)
-    (loop for (clause-name pkg . symbols)
-          in (remove-if-not (lambda (clause)
-                              (member (first clause)
-                                      '(:import-from
-                                        :shadowing-import-from)))
-                            (nthcdr 2 form))
-          do (loop for sym in symbols
-                   do (signal-user (find-symbol (string sym) pkg)
-                             'internal-symbol))))
+    (loop :for (clause-name pkg . symbols)
+          :in (remove-if-not (lambda (clause)
+                               (member (first clause)
+                                       '(:import-from
+                                         :shadowing-import-from)))
+                             (nthcdr 2 form))
+          :do (loop :for sym :in symbols
+                    :do (signal-user (find-symbol (string sym) pkg)
+                                     'internal-symbol))))
   (does-not-macroexpand))
 
 
@@ -336,11 +335,11 @@
               (signal-user typespec 'deftype)))))
 
   (define-macroexpand-handlers (form) (handler-bind handler-case)
-    (loop for (condition . stuff) in (if (eql 'handler-bind (first form))
-                                         (second form)
-                                         (cddr form))
-          unless (eql condition :no-error)
-            do (traverse-subtypes condition))
+    (loop :for (condition . stuff) :in (if (eql 'handler-bind (first form))
+                                           (second form)
+                                           (cddr form))
+          :unless (eql condition :no-error)
+            :do (traverse-subtypes condition))
     (does-not-macroexpand))
 
   (define-macroexpand-handlers (form) (deftype)
@@ -349,8 +348,8 @@
     (does-not-macroexpand))
 
   (define-macroexpand-handlers (form) (typecase etypecase)
-    (loop for (typespec . rest) in (cddr form)
-          do (traverse-subtypes typespec))
+    (loop :for (typespec . rest) :in (cddr form)
+          :do (traverse-subtypes typespec))
     (does-not-macroexpand))
 
   (define-macroexpand-handlers (form) (check-type)
