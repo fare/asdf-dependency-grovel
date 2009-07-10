@@ -322,18 +322,18 @@ keeping declarations intact."
 (defun system-file-components (system)
   "Flatten the tree of modules/components into a list that
 contains only the non-module components."
-  (loop for component in (asdf:module-components system)
-        if (typep component 'asdf:module)
-          append (system-file-components component)
-        else
-          collect component))
+  (loop :for component :in (asdf:module-components system)
+        :if (typep component 'asdf:module)
+          :append (system-file-components component)
+        :else
+          :collect component))
 
 (defun map-over-instrumented-component-and-parents (component slot-name)
-  (loop for c = component then (asdf:component-parent c)
-        until (null c)
-        when (and (typep c 'instrumented-component)
-                  (slot-boundp c slot-name))
-          append (slot-value c slot-name)))
+  (loop :for c = component :then (asdf:component-parent c)
+        :until (null c)
+        :when (and (typep c 'instrumented-component)
+                   (slot-boundp c slot-name))
+        :append (slot-value c slot-name)))
 
 (defun dwim-stringify-component-spec (component-spec)
   (case (char component-spec 0)
@@ -497,7 +497,7 @@ after operating on a component).")
 (defun compute-dependencies-for-component (component state
                                    &key generator)
   (let ((component-counter (get-counter-of component state)))
-    (loop :for form :being :the :hash-key :of (get-usage-of component state)
+    (loop :for form :being :the :hash-keys :of (get-usage-of component state)
           :do (generate-form-providers
                    form state
                    :before (if *non-asdf-p* nil component-counter)
@@ -514,25 +514,25 @@ after operating on a component).")
 (defun cull-dependencies (component state)
   (let ((dependency-space (make-hash-table)))
     (make-dependency-space component state dependency-space)
-    (loop for dep in (cached-component-dependencies state component)
-          if (= 1 (gethash dep dependency-space))
-            collect dep)))
+    (loop :for dep :in (cached-component-dependencies state component)
+          :if (= 1 (gethash dep dependency-space))
+            :collect dep)))
 
 (defun dependency-forms (state interesting-systems
                          &key cull-redundant)
   (let ((s-deps (slot-value state 'system-dependencies)))
-    (loop for system in interesting-systems
-          collect `(,system
+    (loop :for system :in interesting-systems
+          :collect `(,system
                      :depends-on
-                     ,(loop for d-sys being the hash-key
-                            of (gethash system s-deps (make-hash-table))
-                            collect d-sys)
+                     ,(loop :for d-sys :being :the :hash-keys
+                            :of (gethash system s-deps (make-hash-table))
+                            :collect d-sys)
                      :components
-                     ,(loop for comp in (system-file-components system)
-                            for deps = (if cull-redundant
+                     ,(loop :for comp :in (system-file-components system)
+                            :for deps = (if cull-redundant
                                            (cull-dependencies comp state)
                                            (cached-component-dependencies state comp))
-                            collect `(,comp :depends-on ,deps))))))
+                            :collect `(,comp :depends-on ,deps))))))
 
 (defun coerce-name (maybe-class)
   (if (typep maybe-class 'standard-class)
@@ -544,9 +544,9 @@ after operating on a component).")
   (let* ((op (make-instance traverse-type))
          (opspecs (asdf::traverse op system))
          (order-table (make-hash-table)))
-    (loop for (op . component) in opspecs
-          for component-index from 0
-          do (setf (gethash component order-table) component-index))
+    (loop :for (op . component) :in opspecs
+          :for component-index :from 0
+          :do (setf (gethash component order-table) component-index))
     (sort compspecs #'<
           :key (lambda (c) (gethash (first c) order-table -1)))))
 
@@ -625,10 +625,10 @@ after operating on a component).")
 (defun read-definition-from-asd (pathname)
   (with-open-file (f pathname)
     (let ((package (asdf::make-temporary-package)))
-      (loop for expr = (let ((*package* package))
+      (loop :for expr = (let ((*package* package))
                          (read f nil nil))
-            until (null expr)
-            do (cond ((consp expr)
+            :until (null expr)
+            :do (cond ((consp expr)
                       (case (first expr)
                         (cl:in-package
                          (setf *package* (find-package (second expr))))
@@ -640,8 +640,8 @@ after operating on a component).")
   (apply #'append
          (mapcar
           (lambda (sys)
-            (loop for (comp nil deps) in (getf (cdr sys) :components)
-                  collect `(,(maybe-translated-component-class comp)
+            (loop :for (comp nil deps) :in (getf (cdr sys) :components)
+                  :collect `(,(maybe-translated-component-class comp)
                                    ,(enough-component-name-from-reader comp)
                                    :depends-on ,(remove-duplicates
                                                        `(,@(or (mapcar #'read-from-string
@@ -703,18 +703,18 @@ after operating on a component).")
                                                current-deps)
                                 #'string<
                                 :key #'second)))
-          (loop for my-comp in my-comps
-                for cur-comp in cur-comps
-                for mc-deps = (getf my-comp :depends-on)
-                for cc-deps = (getf cur-comp :depends-on)
-                for cc-redundant-deps = (set-difference cc-deps mc-deps :test #'equal)
-                for cc-missing-deps = (set-difference mc-deps cc-deps :test #'equal)
-                do (assert (equal (second cur-comp) (second my-comp))
-                           (cur-comp my-comp))
-                do (unless (null cc-redundant-deps)
-                     (push `(,(second cur-comp) ,@cc-redundant-deps) redundant-deps))
-                do (unless (null cc-missing-deps)
-                       (push `(,(second cur-comp) ,@cc-missing-deps) missing-dependencies)))
+          (loop :for my-comp :in my-comps
+                :for cur-comp :in cur-comps
+                :for mc-deps = (getf my-comp :depends-on)
+                :for cc-deps = (getf cur-comp :depends-on)
+                :for cc-redundant-deps = (set-difference cc-deps mc-deps :test #'equal)
+                :for cc-missing-deps = (set-difference mc-deps cc-deps :test #'equal)
+                :do (assert (equal (second cur-comp) (second my-comp))
+                            (cur-comp my-comp))
+                :do (unless (null cc-redundant-deps)
+                      (push `(,(second cur-comp) ,@cc-redundant-deps) redundant-deps))
+                :do (unless (null cc-missing-deps)
+                      (push `(,(second cur-comp) ,@cc-missing-deps) missing-dependencies)))
           (format stream "~:[~;~&Components only in ~A:~{~&     ~S~}~]"
                   c-missing-in-result base-asd-file c-missing-in-result)
           (format stream "~:[~;~&Components missing in ~A:~{~&     ~S~}~]"
@@ -775,13 +775,13 @@ after operating on a component).")
        (dolist (c (system-file-components system))
          (remhash 'asdf:load-op (asdf::component-operation-times c))))
      (delete-duplicates
-      (loop for system in load-systems
-            append
-            (loop for (op . c) in (asdf::traverse (make-instance 'asdf:load-op)
+      (loop :for system :in load-systems
+            :append
+            (loop :for (op . c) :in (asdf::traverse (make-instance 'asdf:load-op)
                                        system)
-                  do (note-operating-on-component c state)
-                  unless (dependency-op-done-p c)
-                    collect c)))))
+                  :do (note-operating-on-component c state)
+                  :unless (dependency-op-done-p c)
+                  :collect c)))))
 
 ;;; Re-groveling works like this:
 ;;;  We keep a dependency state, which contains:
@@ -808,11 +808,11 @@ after operating on a component).")
                                   :name nil
                                   :defaults *load-truename*))))
   (with-groveling-environment (state verbose debug-object-types base-pathname)
-    (loop for component in (update-component-order state systems
-                                  interesting-systems)
-          with load-op = (make-instance 'asdf:load-op)
-          with compile-op = (make-instance 'asdf:compile-op)
-          do (with-groveling-macroexpand-hook
+    (loop :with load-op = (make-instance 'asdf:load-op)
+          :with compile-op = (make-instance 'asdf:compile-op)
+          :for component :in (update-component-order state systems
+                                                     interesting-systems)
+          :do (with-groveling-macroexpand-hook
                (handler-bind ((error
                                (lambda (c)
                                  (format *error-output*
@@ -954,10 +954,8 @@ after operating on a component).")
          (format stream "~&File ~S depends on:~%" comp)
          (dolist (dep deps)
            (format stream "    file ~S because of:~%" dep)
-           (loop :for thing :being :the :hash-keys
-                 :in (gethash comp users)
-                 :if (loop :for (counter provider)
-                           :in (gethash thing providers)
+           (loop :for thing :being :the :hash-keys :in (gethash comp users)
+                 :if (loop :for (counter provider) :in (gethash thing providers)
                            :if (equal provider dep) :do (return t)
                            :finally (return nil)) :do
               (format stream "        ~{~S  (~S)~}~%" thing)))))
@@ -966,15 +964,15 @@ after operating on a component).")
     (loop :with expanded = nil
           :with stack = (loop :for comp :being :the :hash-keys :in comp-deps
                               :collecting (list comp))
-          :until (null stack)
-          :for chain = (pop stack)
-          :for comp = (car chain)
-          :unless (member comp expanded :test #'equal) :do
-       (push comp expanded)
-       (dolist (dep (gethash comp comp-deps))
-         (if (member dep chain :test #'equal)
-             (format stream "    ~S~%" (reverse chain))
-             (push (cons dep chain) stack))))))
+          :until (null stack) :do
+          (let* ((chain (pop stack))
+                 (comp (car chain)))
+            (unless (member comp expanded :test #'equal)
+              (push comp expanded)
+              (dolist (dep (gethash comp comp-deps))
+                (if (member dep chain :test #'equal)
+                    (format stream "    ~S~%" (reverse chain))
+                    (push (cons dep chain) stack))))))))
 
 ;;;;;;;;;;;;;;;;;;; Hardcore Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;;
 
