@@ -49,29 +49,28 @@ to the base of the system."
 ;;; TODO for asdf-component/op:
 ;;; * ignore component-name. I have no idea what it /should/ indicate.
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defclass component-file (asdf:source-file)
-       ((last-grovel-state :initform nil)
-        (load-system :initarg :load-systems)
-        (merge-systems :initarg :merge-systems)
-        (cull-redundant :initarg :cull-redundant :initform nil)
-        (verbose :initarg :verbose :initform t)
-        (output-file :initarg :output-file)
-        (base-pathname :initarg :base-pathname)
-        (debug-object-types :initarg :debug-object-types :initform nil)
-        (base-asd-file :initarg :base-asd-file :initform nil)
-        (additional-initargs :initarg :additional-initargs :initform nil
-                             :documentation
-                             #.(format nil "A list of mappings from ~
+(defclass component-file (asdf:source-file)
+  ((last-grovel-state :initform nil)
+   (load-system :initarg :load-systems)
+   (merge-systems :initarg :merge-systems)
+   (cull-redundant :initarg :cull-redundant :initform nil)
+   (verbose :initarg :verbose :initform t)
+   (output-file :initarg :output-file)
+   (base-pathname :initarg :base-pathname)
+   (debug-object-types :initarg :debug-object-types :initform nil)
+   (base-asd-file :initarg :base-asd-file :initform nil)
+   (additional-initargs :initarg :additional-initargs :initform nil
+                        :documentation
+                        #.(format nil "A list of mappings from ~
                            components in systems to additional initargs that the ~
                            instrumented components should receive. E.g.:
                            ((:foo-system (\"module\" \"component-name\") :additional-dependencies ())
                             (:foo-system (\"component2\") :data-files ())"))))
 
-  (defclass dependency-op (asdf:operation)
-       ())
+(defclass dependency-op (asdf:operation)
+  ())
 
-  (defclass compare-dependency-op (dependency-op) ()))
+(defclass compare-dependency-op (dependency-op) ())
 
 (defun state-of (op component)
   (declare (ignore op))
