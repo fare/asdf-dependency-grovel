@@ -254,14 +254,13 @@
 
 (define-macroexpand-handlers (form :environment env) (defconstant)
   (let ((symbol (second form)))
-    (signal-provider symbol 'defconstant)
-    (if *non-asdf-p*
-      ;; FIXME defconstant is problematic; turn it off for non-ASDF for now
-      (does-not-macroexpand)
-      (does-macroexpand-with-epilogue
-       ((macro-function 'symbol-macroify) env)
-       `(symbol-macroify ,@form)
-       `((setf (symbol-value ',symbol) ,symbol) ',symbol)))))
+    (signal-provider (second form) (first form))
+    (does-macroexpand-with-epilogue
+     ((macro-function 'symbol-macroify) env)
+     `(symbol-macroify ,@form)
+     `((eval-when (:compile-toplevel :load-toplevel :execute)
+	 (setf (symbol-value ',symbol) ,symbol))
+       ',symbol))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)

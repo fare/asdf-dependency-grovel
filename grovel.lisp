@@ -24,8 +24,8 @@
 
 ;; Used only by the defconstant handler.
 (defmacro symbol-macroify (operator name &rest args &environment env)
-  (let ((new-name (gentemp (format nil "asdf-dependency-grovel-~A-"
-                                   operator))))
+  (let ((new-name (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-~A--~A"
+                                   operator name))))
     `(progn
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
