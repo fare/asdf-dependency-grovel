@@ -17,12 +17,16 @@
 (eval-when (:compile-toplevel :load-toplevel)
   ;; Used in a number of places, but not exported.
   (defun canonical-package-name (package-designator)
+    "Return the name of a package as a symbol, given either a package object or
+     a string or symbol naming the package.  Note that given a package nickname
+     as a string or symbol, it returns a symbol for that nickname, not for the
+     primary name of that package."
     (intern (typecase package-designator
               (package (package-name package-designator))
               (t (string package-designator)))
             :asdf-dependency-grovel.packages)))
 
-;; Used only by the defconstant handler.
+;; Currently used only by the defconstant handler.
 (defmacro symbol-macroify (operator name &rest args &environment env)
   (let ((new-name (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-~A--~A"
                                    operator name))))
@@ -30,7 +34,7 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
-;; Used only by instrumenting-macroexpand-hook.
+;; Currently used only by instrumenting-macroexpand-hook.
 (defmacro walk-symbols ((sym form) &body body)
   "Visit each symbol in `form' one at a time, bind `sym' to that symbol, and
    execute the body."
@@ -51,8 +55,8 @@
 (defun signal-provider (name form-type &optional (*current-dependency-state*
                                                   *current-dependency-state*))
   "Signal that symbol `name' of kind `form-type' is being provided by the
-   current component.  For example, (defun foo ...) would signal with name foo
-   and form-type defun."
+   current component.  For example, (defun foo ...) would signal with `name'
+   foo and `form-type' defun."
   ;; If we're using SBCL, we may need to filter out occasional bogus provisions
   ;; of symbols from the SB-IMPL package.  (msteele)
   #+sbcl
@@ -73,8 +77,8 @@
 (defun signal-user (name form-type &optional (*current-dependency-state*
                                               *current-dependency-state*))
   "Signal that symbol `name' of kind `form-type' is being used by the
-   current component.  For example, (with-foo ...) might signal with name
-   with-foo and form-type defmacro."
+   current component.  For example, (with-foo ...) might signal with `name'
+   with-foo and `form-type' defmacro."
   (if *using-constituents*
       (when (and *current-constituent* (not (eql form-type 'defvar)))
         (constituent-add-use (list name form-type)
@@ -91,18 +95,25 @@
                 component-counter))))
   (values))
 
-;; Used by in-package handler and by call-with-dependency-tracking (asdf-ops).
-(defun signal-new-internal-symbols ()
-  (when *using-constituents*
-    (return-from signal-new-internal-symbols))
-  (when *previous-package*
-    (with-package-iterator (next-sym *previous-package* :internal :inherited)
-      (loop :for (not-at-end-p symbol) = (multiple-value-list (next-sym))
-            :while not-at-end-p
-            :do (unless (gethash symbol *previously-interned-symbols*)
-                  (signal-provider symbol 'internal-symbol)))))
-  (clrhash *previously-interned-symbols*)
-  (setf *previous-package* nil))
+;; This function is part of the machinery for noticing dependencies due to
+;; importing symbols.  For details, refer to the "Internal Symbol Checking"
+;; section of variables.lisp.
+(defun signal-new-internal-symbols (&key (populate nil))
+  "This should be called by the in-package handler as well as at the end of
+   each constituent (at every level).  It looks for symbols that have been
+   added to *previous-package* since the last time
+   *previously-interned-symbols* was populated, and signals that the current
+   constituent provided them.  Uses of these symbols are picked up in
+   the :import-from and :shadowing-import-from clauses of a defpackage.
+   The :populate keyword, if non-nil, tells signal-new-internal-symbols to
+   populate *previously-interned-symbols* with any missing symbols (after
+   signaling provisions)."
+  (when *check-internal-symbols-p*
+    (do-symbols (sym *previous-package*)
+      (unless (hashset-contains-p sym *previously-interned-symbols*)
+        (signal-provider sym 'internal-symbol)
+        (when populate
+          (hashset-add sym *previously-interned-symbols*))))))
 
 ;; These two provide support for symbol macros.  The former is used by the
 ;; define-symbol-macro handler, and the second must exist in case someone uses
@@ -844,48 +855,72 @@ after operating on a component).")
 (defmacro with-constituent-groveling (&body body)
   `(let ((*non-asdf-p* t) ;; TODO remove this eventually
          (*using-constituents* t) ;; TODO remove this eventually
-         (*features* (adjoin 'groveling *features*))
+         ;; Initialize an fresh constituent environment.
          (*constituent-table* (make-hash-table :test #'equal))
-         (*current-constituent* (make-instance 'top-constituent :parent nil)))
+         (*current-constituent* (make-instance 'top-constituent :parent nil))
+         ;; Set up machinery for checking internal symbols.
+         (*previous-package* *package*)
+         (*previously-interned-symbols*
+          (let ((hashset (make-hashset :test 'eql)))
+            (do-symbols (sym *package*)
+              (hashset-add sym hashset))
+            hashset))
+         (*check-internal-symbols-p* t)
+         ;; Indicate that we are groveling.
+         (*features* (adjoin 'groveling *features*)))
      ,@body))
 
 (defmacro operating-on-file-constituent ((path) &body body)
+  "Used internally; not exported."
   (with-gensyms (path! designator existing-con present-p con)
-    `(progn
-       (assert *constituent-table*)
-       (assert *current-constituent*)
-       (let* ((,path! ,path)
-              (,designator (cons ,path! (constituent-designator
-                                         *current-constituent*)))
-              (,con (multiple-value-bind (,existing-con ,present-p)
-                        (gethash ,designator *constituent-table*)
-                      (if ,present-p ,existing-con
-                          (setf (gethash ,designator *constituent-table*)
-                                (make-instance 'file-constituent
-                                               :parent *current-constituent*
-                                               :path ,path!)))))
-              (*current-constituent* ,con))
-         (assert (equal (constituent-designator ,con) ,designator))
-         ,@body))))
+    `(let* ((,path! ,path)
+            (,designator (cons ,path! (constituent-designator
+                                       *current-constituent*)))
+            (,con (multiple-value-bind (,existing-con ,present-p)
+                      (gethash ,designator *constituent-table*)
+                    (if ,present-p ,existing-con
+                        (setf (gethash ,designator *constituent-table*)
+                              (make-instance 'file-constituent
+                                             :parent *current-constituent*
+                                             :path ,path!)))))
+            (*current-constituent* ,con)
+            (*previous-package* *package*)) ;; See Note [prev-package] below
+       (assert (equal (constituent-designator ,con) ,designator))
+       (multiple-value-prog1
+           (progn ,@body)
+         (signal-new-internal-symbols :populate t)))))
+
+;; Note [prev-package]: Notice that operating-on-file-constituent binds
+;; *previous-package* to *package*, and operating-on-form-constituent doesn't.
+;; This is to ensure that the in-package handler behaves correctly.  Recall
+;; that the in-package handler will setf *previous-package* to the newly
+;; selected package.  Thus, operating-on-file-constituent must ensure that
+;; *previous-package* gets reset back to the old value of *package* after
+;; loading the file, because *package* itself will get reset by the load
+;; function.  However, operating-on-form-constituent must _not_ bind
+;; *previous-package*, because otherwise later forms in the same file wouldn't
+;; observe the change to *previous-package* made by the in-package handler.
 
 (defmacro operating-on-form-constituent ((index &optional summary) &body body)
+  "Used internally; not exported."
   (with-gensyms (index! designator existing-con present-p con)
-    `(progn
-       (assert *constituent-table*)
-       (assert *current-constituent*)
-       (let* ((,index! ,index)
-              (,designator (cons ,index! (constituent-designator
-                                          *current-constituent*)))
-              (,con (multiple-value-bind (,existing-con ,present-p)
-                        (gethash ,designator *constituent-table*)
-                      (if ,present-p ,existing-con
-                          (setf (gethash ,designator *constituent-table*)
-                                (make-instance 'form-constituent
-                                               :parent *current-constituent*
-                                               :summary ,summary)))))
-              (*current-constituent* ,con))
-         (assert (equal (constituent-designator ,con) ,designator))
-         ,@body))))
+    `(let* ((,index! ,index)
+            (,designator (cons ,index! (constituent-designator
+                                        *current-constituent*)))
+            (,con (multiple-value-bind (,existing-con ,present-p)
+                      (gethash ,designator *constituent-table*)
+                    (if ,present-p ,existing-con
+                        (setf (gethash ,designator *constituent-table*)
+                              (make-instance 'form-constituent
+                                             :parent *current-constituent*
+                                             :summary ,summary)))))
+            (*current-constituent* ,con))
+       (assert (equal (constituent-designator ,con) ,designator))
+       (multiple-value-prog1
+           (progn ,@body)
+         (signal-new-internal-symbols :populate t)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Consituent Reporting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun print-constituent-dependency-report (&key (stream t))
   (let ((constituent *current-constituent*))

@@ -203,12 +203,11 @@
 (define-macroexpand-handlers (form) (defpackage)
   ;; signal a use for the package first, to do the package
   ;; redefinition dance right.
-  (signal-user
-   (canonical-package-name (second form))
-   'defpackage)
-  (signal-provider
-   (canonical-package-name (second form))
-   'defpackage)
+  (signal-user (canonical-package-name (second form))
+               'defpackage)
+  ;; Provide the package.
+  (signal-provider (canonical-package-name (second form))
+                   'defpackage)
   (labels ((clause-contents (clause-name &optional (filter #'rest))
              (mapcar #'canonical-package-name
                      (reduce #'append
@@ -216,12 +215,13 @@
                                      (remove-if-not (lambda (clause)
                                                       (eql clause-name
                                                            (first clause)))
-                                                    (nthcdr 2 form))))))
+                                                    (cddr form))))))
            (clause-second-element (clause)
              (list (second clause))))
+    ;; Provide each nickname of the package.
     (loop :for nickname :in (clause-contents :nickname)
           :do (signal-provider nickname 'defpackage))
-    ;; signal :uses of packages
+    ;; Signal uses of packages.
     (loop :for use :in (append (clause-contents :use)
                                (clause-contents :import-from
                                                 #'clause-second-element)
@@ -230,24 +230,31 @@
           :do (signal-user (canonical-package-name use) 'defpackage))
     ;; signal imports of symbols (they need to exist before they can
     ;; be imported)
-    (loop :for (clause-name pkg . symbols)
-          :in (remove-if-not (lambda (clause)
-                               (member (first clause)
-                                       '(:import-from
-                                         :shadowing-import-from)))
-                             (nthcdr 2 form))
-          :do (loop :for sym :in symbols
-                    :do (signal-user (find-symbol (string sym) pkg)
-                                     'internal-symbol))))
+    (when *check-internal-symbols-p*
+      (loop :for (clause-name pkg . symbols)
+            :in (remove-if-not (lambda (clause)
+                                 (member (first clause)
+                                         '(:import-from
+                                           :shadowing-import-from)))
+                               (cddr form))
+            :do (loop :for sym :in symbols
+                      :do (signal-user (find-symbol (string sym) pkg)
+                                       'internal-symbol)))))
   (does-not-macroexpand))
 
 
 (define-macroexpand-handlers (form) (in-package)
-  (when *previous-package*
-    (signal-new-internal-symbols))
-  (setf *previous-package* (find-package (second form)))
-  (do-symbols (symbol *previous-package*)
-    (setf (gethash symbol *previously-interned-symbols*) t))
+  ;; If we're checking internal symbols, we need to account for the fact that
+  ;; we're switching packages.
+  (when *check-internal-symbols-p*
+    ;(when *previous-package*
+    (signal-new-internal-symbols :populate nil); *previous-package*);)
+    (clrhash *previously-interned-symbols*) ; BLARG
+    (setf *previous-package* (find-package (second form)))
+    (do-symbols (symbol *previous-package*)
+      (hashset-add symbol *previously-interned-symbols*)))
+;      (setf (gethash symbol *previously-interned-symbols*) t)))
+  ;; Signal that we're using the package.
   (signal-user (canonical-package-name (second form)) 'defpackage)
   (does-not-macroexpand))
 
@@ -285,7 +292,7 @@
 ;; nothing.  The only time it would seem to help is if one constituent stores a
 ;; lambda somewhere, and other uses it, but that case ought to be caught by
 ;; e.g. the defparameter handler.  Having lambda instrumentation makes QPX take
-;; a very long time build.  (msteele)
+;; a very long time to build.  (msteele)
 (define-macroexpand-handlers (form :function fun :environment env) (lambda)
   (if *using-constituents*
       (does-not-macroexpand)
