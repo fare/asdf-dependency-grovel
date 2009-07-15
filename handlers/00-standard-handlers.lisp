@@ -13,9 +13,12 @@
 
 (in-package :asdf-dependency-grovel)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
 (defmacro define-macroexpand-handlers ((form &key
-                                             (environment (gensym) environmentp)
-                                             (function (gensym) functionp))
+                                        (environment (gensym) environmentp)
+                                        (function (gensym) functionp))
                                        (&rest form-names) &body body)
   ;;; TODO: destructuring-bind form?
   `(progn
@@ -40,17 +43,31 @@
                               *macroexpansion-handlers*)
                         ',fun-name))))
 
-(defmacro define-simple-macroexpand-handlers (form-var identifier-form
-                                              signal-type signal-form-type
-                                              (&rest form-names))
-  (let ((identifier (gensym)))
-    `(define-macroexpand-handlers (,form-var) (,@form-names)
-       (let ((,identifier ,identifier-form))
-         (,(ecase signal-type
-             (:user 'signal-user)
-             (:provider 'signal-provider))
-           ,identifier ,signal-form-type)
-         (does-not-macroexpand)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Variable-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-macroexpand-handlers (form)
+    (defvar defparameter)
+  (signal-provider (second form) 'defvar)
+  (unless *using-constituents*
+    (setf (gethash (second form) *suspected-variables*) t))
+  (does-not-macroexpand))
+
+
+(define-macroexpand-handlers (form :environment env)
+    (defconstant)
+  (let ((symbol (second form)))
+    (signal-provider (second form) (first form))
+    (does-macroexpand-with-epilogue
+     ((macro-function 'symbol-macroify) env)
+     `(symbol-macroify ,@form)
+     `((eval-when (:compile-toplevel :load-toplevel :execute)
+	 (setf (symbol-value ',symbol) ,symbol))
+       ',symbol))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (define-macroexpand-handlers (form) (defmacro define-method-combination)
@@ -58,42 +75,56 @@
   (does-not-macroexpand))
 
 
-(define-simple-macroexpand-handlers form
-    (second form) :provider 'setf
-    (defsetf define-setf-expander))
+(define-macroexpand-handlers (form :function fun :environment env)
+    (define-symbol-macro)
+  (destructuring-bind (def name expansion) form
+    (signal-provider name def)
+    (does-macroexpand (fun env)
+      `(,def ,name (signal-symbol-macroexpansion ',name ,expansion)))))
 
 
-(define-macroexpand-handlers (form) (setf)
-  (loop :for (setee value) :on (cdr form) :by #'cddr
-        :do (cond
-              ((consp setee)
-               (signal-user (first setee) 'setf))
-              ((and (symbolp setee) (boundp setee))
-               (signal-user setee 'defvar)
-               (signal-provider setee 'defvar))))
-  (does-not-macroexpand))
+;;;;;;;;;;;;;;;;;;;;;;;;;; Function-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(define-macroexpand-handlers (form) (pushnew push)
-  (let ((setee (third form)))
-    (when (and (symbolp setee) (boundp setee))
-      (signal-user setee 'defvar)
-      (signal-provider setee 'defvar))))
+(define-macroexpand-handlers (form :function fun :environment env)
+    (defun)
+  (destructuring-bind (defun name arg-list &rest maybe-body) form
+    (signal-provider name (first form))
+    (does-macroexpand (fun env)
+      `(,defun ,name ,arg-list
+         ,@(instrument-defun-body maybe-body
+                                  `(signal-user ',name 'defun))))))
 
 
-(define-macroexpand-handlers (form) (defgeneric)
+;; I think instrumenting lambdas is overkill.  Most of the time, such as when
+;; the lambda is an argument to e.g. mapcar, the instrumentation accomplishes
+;; nothing.  The only time it would seem to help is if one constituent stores a
+;; lambda somewhere, and other uses it, but that case ought to be caught by
+;; e.g. the defparameter handler.  Having lambda instrumentation makes QPX take
+;; a very long time to build.  (msteele)
+
+;; (define-macroexpand-handlers (form :function fun :environment env)
+;;     (lambda)
+;;   (let ((name (gentemp "ASDF-DEPENDENCY-GROVEL-LAMBDA"
+;;                        '#:asdf-dependency-grovel.lambdas)))
+;;     (destructuring-bind (l arg-list &rest maybe-body) form
+;;       (signal-provider name 'defun)
+;;       (does-macroexpand (fun env)
+;;         `(,l ,arg-list
+;;              ,@(instrument-defun-body maybe-body
+;;                                       `(signal-user ',name 'defun)))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Method-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-macroexpand-handlers (form)
+    (defgeneric)
   (signal-provider (second form) 'defgeneric)
   (let ((method-combination (second (assoc :method-combination
                                            (nthcdr 3 form)))))
     (when method-combination
       (signal-user method-combination 'define-method-combination)))
-  (does-not-macroexpand))
-
-
-(define-macroexpand-handlers (form) (defvar defparameter)
-  (signal-provider (second form) 'defvar)
-  (unless *using-constituents*
-    (setf (gethash (second form) *suspected-variables*) t))
   (does-not-macroexpand))
 
 
@@ -109,7 +140,8 @@
                        :if (not (listp elt))
                          :collect elt :into modifiers
                        :else
-                         :do (signal-provider `(,name ,@modifiers ,elt) 'defmethod)
+                         :do (signal-provider `(,name ,@modifiers ,elt)
+                                              'defmethod)
                          :and :do
                            (loop :for arg :in elt
                                  :when (and (listp arg)
@@ -129,7 +161,11 @@
       new-expansion)))
 
 
-(define-macroexpand-handlers (form) (defclass define-condition)
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Class-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-macroexpand-handlers (form)
+    (defclass define-condition)
   (signal-provider (second form) (first form))
   (signal-provider (second form) 'deftype)
   ;; signal use of direct superclasses/superconditions. Note that we
@@ -146,7 +182,8 @@
   (does-not-macroexpand))
 
 
-(define-macroexpand-handlers (form :function fun :environment env) (defstruct)
+(define-macroexpand-handlers (form :function fun :environment env)
+    (defstruct)
   (destructuring-bind (header &rest body) (cdr form)
     (destructuring-bind (name &rest struct-options)
         (if (listp header) header (list header))
@@ -200,7 +237,54 @@
                                  (append redefinitions (list `',name)))))))))
 
 
-(define-macroexpand-handlers (form) (defpackage)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Type-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(labels ((traverse-subtypes (typespec)
+           (cond
+             ((consp typespec)
+              (case (first typespec)
+                (quote            ; typespecs often come quoted. argh.
+                 (traverse-subtypes (second typespec)))
+                ((and or not) (mapcar #'traverse-subtypes (rest typespec)))
+                (satisfies (signal-user (second typespec) 'defun))
+                ((vector array) (traverse-subtypes (second typespec)))
+                (function (and (second typespec)
+                               (traverse-subtypes (second typespec))
+                               (and (third typespec)
+                                    (traverse-subtypes (third typespec)))))
+                (:otherwise nil)))
+             ((not (null typespec))
+              (signal-user typespec 'deftype)))))
+
+  (define-macroexpand-handlers (form) (handler-bind handler-case)
+    (loop :for (condition . stuff) :in (if (eql 'handler-bind (first form))
+                                           (second form)
+                                           (cddr form))
+          :unless (eql condition :no-error)
+            :do (traverse-subtypes condition))
+    (does-not-macroexpand))
+
+  (define-macroexpand-handlers (form) (deftype)
+    (signal-provider (second form) 'deftype)
+    (traverse-subtypes (fourth form))
+    (does-not-macroexpand))
+
+  (define-macroexpand-handlers (form) (typecase etypecase)
+    (loop :for (typespec . rest) :in (cddr form)
+          :do (traverse-subtypes typespec))
+    (does-not-macroexpand))
+
+  (define-macroexpand-handlers (form) (check-type)
+    (traverse-subtypes (third form))
+    (does-not-macroexpand)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Package-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-macroexpand-handlers (form)
+    (defpackage)
   ;; signal a use for the package first, to do the package
   ;; redefinition dance right.
   (signal-user (canonical-package-name (second form))
@@ -243,67 +327,48 @@
   (does-not-macroexpand))
 
 
-(define-macroexpand-handlers (form) (in-package)
+(define-macroexpand-handlers (form)
+    (in-package)
   ;; If we're checking internal symbols, we need to account for the fact that
   ;; we're switching packages.
   (when *check-internal-symbols-p*
-    ;(when *previous-package*
-    (signal-new-internal-symbols :populate nil); *previous-package*);)
-    (clrhash *previously-interned-symbols*) ; BLARG
+    (signal-new-internal-symbols :populate nil)
+    (clrhash *previously-interned-symbols*)
     (setf *previous-package* (find-package (second form)))
     (do-symbols (symbol *previous-package*)
       (hashset-add symbol *previously-interned-symbols*)))
-;      (setf (gethash symbol *previously-interned-symbols*) t)))
   ;; Signal that we're using the package.
   (signal-user (canonical-package-name (second form)) 'defpackage)
   (does-not-macroexpand))
 
 
-(define-macroexpand-handlers (form :environment env) (defconstant)
-  (let ((symbol (second form)))
-    (signal-provider (second form) (first form))
-    (does-macroexpand-with-epilogue
-     ((macro-function 'symbol-macroify) env)
-     `(symbol-macroify ,@form)
-     `((eval-when (:compile-toplevel :load-toplevel :execute)
-	 (setf (symbol-value ',symbol) ,symbol))
-       ',symbol))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Miscellaneous Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(define-macroexpand-handlers (form :function fun :environment env)
-    (define-symbol-macro)
-  (destructuring-bind (def name expansion) form
-    (signal-provider name def)
-    (does-macroexpand (fun env)
-      `(,def ,name (signal-symbol-macroexpansion ',name ,expansion)))))
+(define-macroexpand-handlers (form)
+    (defsetf define-setf-expander)
+  (signal-provider (second form) 'setf)
+  (does-not-macroexpand))
 
 
-(define-macroexpand-handlers (form :function fun :environment env) (defun)
-  (destructuring-bind (defun name arg-list &rest maybe-body) form
-    (signal-provider name (first form))
-    (does-macroexpand (fun env)
-      `(,defun ,name ,arg-list
-         ,@(instrument-defun-body maybe-body
-                                  `(signal-user ',name 'defun))))))
+(define-macroexpand-handlers (form)
+    (setf)
+  (loop :for (setee value) :on (cdr form) :by #'cddr
+        :do (cond
+              ((consp setee)
+               (signal-user (first setee) 'setf))
+              ((and (symbolp setee) (boundp setee))
+               (signal-user setee 'defvar)
+               (signal-provider setee 'defvar))))
+  (does-not-macroexpand))
 
 
-;; I think instrumenting lambdas is overkill.  Most of the time, such as when
-;; the lambda is an argument to e.g. mapcar, the instrumentation accomplishes
-;; nothing.  The only time it would seem to help is if one constituent stores a
-;; lambda somewhere, and other uses it, but that case ought to be caught by
-;; e.g. the defparameter handler.  Having lambda instrumentation makes QPX take
-;; a very long time to build.  (msteele)
-(define-macroexpand-handlers (form :function fun :environment env) (lambda)
-  (if *using-constituents*
-      (does-not-macroexpand)
-      (let ((name (gentemp "ASDF-DEPENDENCY-GROVEL-LAMBDA"
-                           '#:asdf-dependency-grovel.lambdas)))
-        (destructuring-bind (l arg-list &rest maybe-body) form
-          (signal-provider name 'defun)
-          (does-macroexpand (fun env)
-            `(,l ,arg-list
-                 ,@(instrument-defun-body maybe-body
-                                          `(signal-user ',name 'defun))))))))
+(define-macroexpand-handlers (form)
+    (pushnew push)
+  (let ((setee (third form)))
+    (when (and (symbolp setee) (boundp setee))
+      (signal-user setee 'defvar)
+      (signal-provider setee 'defvar))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)
@@ -323,41 +388,4 @@
         (does-not-macroexpand))))
 
 
-(labels ((traverse-subtypes (typespec)
-           (cond
-             ((consp typespec)
-              (case (first typespec)
-                (quote            ; typespecs often come quoted. argh.
-                 (traverse-subtypes (second typespec)))
-                ((and or not) (mapcar #'traverse-subtypes (rest typespec)))
-                (satisfies (signal-user (second typespec) 'defun))
-                ((vector array) (traverse-subtypes (second typespec)))
-                (function (and (second typespec)
-                               (traverse-subtypes (second typespec))
-                               (and (third typespec)
-                                    (traverse-subtypes (third typespec)))))
-                (:otherwise nil)))
-             ((not (null typespec))
-              (signal-user typespec 'deftype)))))
-
-  (define-macroexpand-handlers (form) (handler-bind handler-case)
-    (loop :for (condition . stuff) :in (if (eql 'handler-bind (first form))
-                                           (second form)
-                                           (cddr form))
-          :unless (eql condition :no-error)
-            :do (traverse-subtypes condition))
-    (does-not-macroexpand))
-
-  (define-macroexpand-handlers (form) (deftype)
-    (signal-provider (second form) 'deftype)
-    (traverse-subtypes (fourth form))
-    (does-not-macroexpand))
-
-  (define-macroexpand-handlers (form) (typecase etypecase)
-    (loop :for (typespec . rest) :in (cddr form)
-          :do (traverse-subtypes typespec))
-    (does-not-macroexpand))
-
-  (define-macroexpand-handlers (form) (check-type)
-    (traverse-subtypes (third form))
-    (does-not-macroexpand)))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

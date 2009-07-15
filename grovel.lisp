@@ -668,15 +668,11 @@ contains only the non-module components."
 ;; Used once in asdf-ops, but nowhere else.
 (defun initially-grovel-dependencies (systems stream
                                       interesting-systems
-                                      &key verbose debug-object-types
+                                      &key verbose
+                                      debug-object-types
                                       cull-redundant
                                       (base-pathname
-;;                                        (truename
-;;                                         (make-pathname
-;;                                          :type nil
-;;                                          :name nil
-;;                                          :defaults *load-truename*))
-                                       (error "doom doom doom")))
+                                       (error "must supply a base-pathname")))
   ;; TODO: debug-object-types.
   (with-new-groveling-environment (verbose debug-object-types base-pathname)
     (let ((state *current-dependency-state*))
@@ -799,14 +795,14 @@ contains only the non-module components."
 ;;      (with-new-groveling-environment (t () #p".")
 ;;        ,@body)))
 
-(defmacro instrumented-load (file)
+(defmacro instrumented-load (file &rest args)
   (with-gensyms (file!)
     `(let ((,file! ,file))
        (if *using-constituents*
            (operating-on-file-constituent (,file!)
              (with-groveling-macroexpand-hook
-               (load ,file!)))
-           (error "instrumented-load only supports constituent groveling")))))
+               (load ,file! ,@args)))
+           (error "instrumented-load only supports constituents")))))
 ;;            (operating-on-component (,file!)
 ;;              (with-groveling-macroexpand-hook
 ;;                (load ,file!)))))))
@@ -814,7 +810,11 @@ contains only the non-module components."
 (defmacro instrumented-compile-file (file &rest args)
   (let ((temp (gensym)))
     `(let ((,temp ,file))
-       (error "instrumented-compile-file is no longer supported"))))
+       (if *using-constituents*
+           (operating-on-file-constituent (,file!)
+             (with-groveling-macroexpand-hook
+               (compile-file ,file! ,@args)))
+       (error "instrumented-compile-file only supports constituents")))))
 ;;        (operating-on-component (,temp)
 ;;          (with-groveling-macroexpand-hook
 ;;            (compile-file ,file ,@args))))))
@@ -869,9 +869,9 @@ contains only the non-module components."
                (t (format nil "(~S ...)" (car form)))))
         (t "(...)")))
 
-;; The below code (and some comments) were copied wholesale from the SBCL
-;; source code for the load and load-as-source functions, and then modified.
-;; It's definitely still in "quick hack" status.
+;; The below code was copied wholesale from the SBCL source code for the load
+;; and load-as-source functions, and then modified.  It's definitely still in
+;; "quick hack" status.
 
 #+sbcl
 (defun hardcore-instrumented-load (pathspec &key
@@ -880,31 +880,14 @@ contains only the non-module components."
                                    (if-does-not-exist t)
                                    (external-format :default))
   (labels ((load-stream (stream filename)
-             (let* (;; Bindings required by ANSI.
-                    (*readtable* *readtable*)
+             (let* ((*readtable* *readtable*)
                     (*package* (sb-int:sane-package))
-                    ;; FIXME: we should probably document the circumstances
-                    ;; where *LOAD-PATHNAME* and *LOAD-TRUENAME* aren't
-                    ;; pathnames during LOAD.  ANSI makes no exceptions here.
                     (*load-pathname* (handler-case (pathname stream)
-                                       ;; FIXME: it should probably be a type
-                                       ;; error to try to get a pathname for a
-                                       ;; stream that doesn't have one, but I
-                                       ;; don't know if we guarantee that.
                                        (error () nil)))
                     (*load-truename* (when *load-pathname*
                                        (handler-case (truename stream)
                                          (file-error () nil))))
-                    ;; Bindings used internally.
                     (sb-fasl::*load-depth* (1+ sb-fasl::*load-depth*))
-                    ;; KLUDGE: I can't find in the ANSI spec where it says
-                    ;; that DECLAIM/PROCLAIM of optimization policy should
-                    ;; have file scope. CMU CL did this, and it seems
-                    ;; reasonable, but it might not be right; after all,
-                    ;; things like (PROCLAIM '(TYPE ..)) don't have file
-                    ;; scope, and I can't find anything under PROCLAIM or
-                    ;; COMPILE-FILE or LOAD or OPTIMIZE which justifies this
-                    ;; behavior. Hmm. -- WHN 2001-04-06
                     (sb-c::*policy* sb-c::*policy*))
                (return-from hardcore-instrumented-load
                  (if (equal (stream-element-type stream) '(unsigned-byte 8))
@@ -1165,7 +1148,6 @@ contains only the non-module components."
 ;;                                   :type nil
 ;;                                   :name nil
 ;;                                   :defaults *load-truename*))))
-;;   (error "doom re-grovel-dependencies")
 ;;   (with-groveling-environment (state verbose debug-object-types base-pathname)
 ;;     (loop :with load-op = (make-instance 'asdf:load-op)
 ;;           :with compile-op = (make-instance 'asdf:compile-op)
