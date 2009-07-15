@@ -61,5 +61,6 @@
                 failed))
     (length failed)))
 
-(defun check-base-deps ()
-  (asdf:oos 'asdf-dependency-grovel:compare-dependency-op :test-serial))
+;; Currently unused (commented out in the test script).
+;; (defun check-base-deps ()
+;;   (asdf:oos 'asdf-dependency-grovel:compare-dependency-op :test-serial))

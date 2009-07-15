@@ -14,8 +14,8 @@
   (format *debug-io* ";; D: ~A ~S~%" string value)
   value)
 
+;; Used in a number of places, but not exported.
 (eval-when (:compile-toplevel :load-toplevel)
-  ;; Used in a number of places, but not exported.
   (defun canonical-package-name (package-designator)
     "Return the name of a package as a symbol, given either a package object or
      a string or symbol naming the package.  Note that given a package nickname
@@ -49,6 +49,26 @@
                              :if (symbolp ,cdr) :do (,visit ,cdr))))))
        (,walk ,form))))
 
+;; Exists only to be exported.
+(defun reload ()
+  "Reload the asdf-dependency-grovel system safely."
+  (let ((*macroexpand-hook* (if (boundp '*old-macroexpand-hook*)
+                                *old-macroexpand-hook*
+                                *macroexpand-hook*)))
+    (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
+
+;; Unused and unexported, but used anyway by XCVB.
+(defun components-in-traverse-order (system compspecs
+                                     &optional (traverse-type 'asdf:load-op))
+  (let* ((op (make-instance traverse-type))
+         (opspecs (asdf::traverse op system))
+         (order-table (make-hash-table)))
+    (loop :for (op . component) :in opspecs
+          :for component-index :from 0
+          :do (setf (gethash component order-table) component-index))
+    (sort compspecs #'<
+          :key (lambda (c) (gethash (first c) order-table -1)))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signaling Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Used all over the place.
@@ -70,7 +90,7 @@
       (when (and *current-dependency-state* *current-component*)
         (with-slots (providers component-counter) *current-dependency-state*
           (push (list component-counter *current-component*)
-                (gethash (make-form name form-type) providers)))))
+                (gethash (list name form-type) providers)))))
   (values))
 
 ;; Used all over the place.
@@ -90,7 +110,7 @@
           (setf (gethash *current-component* users)
                 (gethash *current-component* users
                          (make-hash-table :test #'equal)))
-          (setf (gethash (make-form name form-type)
+          (setf (gethash (list name form-type)
                          (gethash *current-component* users))
                 component-counter))))
   (values))
@@ -309,98 +329,31 @@ keeping declarations intact."
          (*macroexpand-hook* #'instrumenting-macroexpand-hook))
      ,@body))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Currently used only by with-new-groveling-environment.
+(defmacro with-groveling-environment ((state verbose debug-object-types
+					     base-pathname)
+                                            &body body)
+  `(let* ((*current-dependency-state* ,state)
+          (*features* (adjoin 'groveling *features*))
+          (*compile-print* ,verbose)
+          (*compile-verbose* ,verbose)
+          (*debug-object-types* ,debug-object-types)
+          (*default-pathname-defaults* ,base-pathname)
+          (*grovel-dir-suffix* (get-universal-time))
+          ;;(*break-on-signals* 'error)
+          (*suspected-variables* (slot-value *current-dependency-state*
+                                             'suspected-variables)))
+     ,@body))
 
-;;; The actual groveling part.
+;; Currently used only by initially-grovel-dependencies.
+(defmacro with-new-groveling-environment ((verbose debug-object-types
+                                                   base-pathname)
+                                          &body body)
+  `(with-groveling-environment ((make-instance 'dependency-state)
+                                ,verbose ,debug-object-types ,base-pathname)
+     ,@body))
 
-(defun enough-component-name-from-reader (c)
-  (read-from-string (maybe-translated-component-name c)))
-
-(defun enough-component-spec (c &optional pn-p)
-  (flet ((strip/ (name)
-           (subseq name (1+ (or (position #\/ name :from-end t) -1)))))
-
-    (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
-               (make-pathname :name (asdf:component-name c) :type "lisp"))
-        (format nil "~S" (asdf:component-name c))
-        (let ((pn (parse-namestring (enough-namestring (asdf:component-pathname c)))))
-          ;; XXX: make-pathname forms are more portable, but namestrings
-          ;; are more readable.
-          (format nil "~S~:[~; :pathname #p~S~]"
-                  (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
-                                                    :type nil :defaults (asdf:component-pathname c)))
-                  pn-p
-                  (enough-namestring pn))))))
-
-(defun system-file-components (system)
-  "Flatten the tree of modules/components into a list that
-contains only the non-module components."
-  (loop :for component :in (asdf:module-components system)
-        :if (typep component 'asdf:module)
-          :append (system-file-components component)
-        :else
-          :collect component))
-
-(defun map-over-instrumented-component-and-parents (component slot-name)
-  (loop :for c = component :then (asdf:component-parent c)
-        :until (null c)
-        :when (and (typep c 'instrumented-component)
-                   (slot-boundp c slot-name))
-        :append (slot-value c slot-name)))
-
-(defun dwim-stringify-component-spec (component-spec)
-  (case (char component-spec 0)
-    ((#\# #\") ; is a subform, insert as-is
-     ;; of course, this fails if the first char of a pathname should
-     ;; be " or #. Let's hope nobody does that, ever.
-     component-spec)
-    (otherwise ; should be a string, make it one.
-     (concatenate 'string (string #\") component-spec (string #\")))))
-
-(defun additional-dependencies* (component)
-  "Walk the tree up through all parent components and collect
-their :additional-dependencies."
-  (mapcar #'dwim-stringify-component-spec
-          (map-over-instrumented-component-and-parents component 'additional-dependencies)))
-
-(defun overridden-dependencies* (component)
-  (mapcar #'dwim-stringify-component-spec
-          (map-over-instrumented-component-and-parents component 'overridden-dependencies)))
-
-(defun maybe-translated-component-name (component &key include-pathname)
-  (if (and (typep component 'instrumented-component)
-           (slot-boundp component 'translated-name))
-      (format nil "~A~@[ :pathname #.~S~]"
-              (dwim-stringify-component-spec
-               (slot-value component 'translated-name))
-              (and include-pathname
-                   (slot-value component 'translated-pathname)))
-      (enough-component-spec component include-pathname)))
-
-(defun maybe-translated-component-class (component)
-  (cond
-    ;; standard instrumented component with no output
-    ;; file type, and default-component-type files are
-    ;; emitted as :file.
-    ((and (typep component 'instrumented-cl-source-file)
-          (not (slot-boundp component 'output-file-type)))
-     :file)
-    ((and (eql (class-of component)
-               (find-class (or
-                            (coerce-name
-                             (asdf::module-default-component-class
-                              (asdf:component-parent component)))
-                            'asdf:cl-source-file))))
-     :file)
-    ;; instrumented components with output file types emit
-    ;; their output file type
-    ((typep component 'instrumented-component)
-     (class-name (find-class (output-file-type component))))
-    ;; other types get their class name.
-    (t
-     (class-name (class-of component)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Dependency State ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Quick hack: some of these hash tables have been set to use equal instead of
 ;; eql in order to support non-ASDF groveling.  This makes things slower.
@@ -431,9 +384,11 @@ operating on a component).")
 after operating on a component).")
       (suspected-variables :initform (make-hash-table))))
 
-(defun make-form (name form-type)
-  (list name form-type))
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Operating on Component ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Everything below is used only by operating-on-component.
+
+;; Currently used only by operating-on-component.
 (defun note-operating-on-component (component &optional
                                     (*current-dependency-state*
                                      *current-dependency-state*))
@@ -442,6 +397,37 @@ after operating on a component).")
        (unless (gethash component order-table)
          (setf (gethash component order-table) (incf component-counter))))))
 
+;; Used only by generate-form-providers and compute-dependencies-for-component.
+(defun get-counter-of (component state)
+  (with-slots (order-table) state
+     (gethash component order-table)))
+
+;; Used only by compute-dependencies-for-component.
+(defun generate-form-providers (form state &key before generator)
+  (with-slots (providers) state
+    (loop :for (unreliable-count component) :in (gethash form providers)
+          :for count = (or (get-counter-of component state) -1)
+          :when (and component (or (null before) (> before count)))
+            :do (funcall generator component))))
+
+;; Used only by compute-dependencies-for-component.
+(defun get-usage-of (component state)
+  (with-slots (users) state
+     (or (gethash component users)
+         (make-hash-table))))
+
+;; Used only by recompute-dependencies-for.
+(defun compute-dependencies-for-component (component state
+                                   &key generator)
+  (let ((component-counter (get-counter-of component state)))
+    (loop :for form :being :the :hash-keys :of (get-usage-of component state)
+          :do (generate-form-providers
+                   form state
+                   :before (if *non-asdf-p* nil component-counter)
+                   :generator generator))
+    (values)))
+
+;; Used only by operating-on-component.
 (defun recompute-dependencies-for (component)
   (unless *current-dependency-state*
     (return-from recompute-dependencies-for (values nil :no-state)))
@@ -475,9 +461,7 @@ after operating on a component).")
                         (setf (gethash (asdf:component-system dep-c) s-deps)
                               t)))))))
 
-(defun cached-component-dependencies (state component)
-  (gethash component (slot-value state 'component-dependencies)))
-
+;; Currently used only by call-with-dependency-tracking.
 (defmacro operating-on-component ((component &key (update-counter-p t))
                                   &body body)
   `(let ((*current-component* ,component))
@@ -489,80 +473,100 @@ after operating on a component).")
              (get-universal-time))
        (recompute-dependencies-for ,component))))
 
-(defun get-usage-of (component state)
-  (with-slots (users) state
-     (or (gethash component users)
-         (make-hash-table))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Output Component File ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defun get-counter-of (component state)
-  (with-slots (order-table) state
-     (gethash component order-table)))
+;; Everything below is needed only by output-component-file.
 
-(defun generate-form-providers (form state &key before generator)
-  (with-slots (providers) state
-    (loop :for (unreliable-count component) :in (gethash form providers)
-          :for count = (or (get-counter-of component state) -1)
-          :when (and component (or (null before) (> before count)))
-            :do (funcall generator component))))
+;; Used by maybe-translated-component-name and output-component-file.
+(defun enough-component-spec (c &optional pn-p)
+  (flet ((strip/ (name)
+           (subseq name (1+ (or (position #\/ name :from-end t) -1)))))
 
-;;; generating the dependency info
+    (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
+               (make-pathname :name (asdf:component-name c) :type "lisp"))
+        (format nil "~S" (asdf:component-name c))
+        (let ((pn (parse-namestring (enough-namestring (asdf:component-pathname c)))))
+          ;; XXX: make-pathname forms are more portable, but namestrings
+          ;; are more readable.
+          (format nil "~S~:[~; :pathname #p~S~]"
+                  (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
+                                                    :type nil :defaults (asdf:component-pathname c)))
+                  pn-p
+                  (enough-namestring pn))))))
 
-(defun compute-dependencies-for-component (component state
-                                   &key generator)
-  (let ((component-counter (get-counter-of component state)))
-    (loop :for form :being :the :hash-keys :of (get-usage-of component state)
-          :do (generate-form-providers
-                   form state
-                   :before (if *non-asdf-p* nil component-counter)
-                   :generator generator))
-    (values)))
+;; Used by additional-dependencies* and overridden-dependencies*.
+(defun map-over-instrumented-component-and-parents (component slot-name)
+  (loop :for c = component :then (asdf:component-parent c)
+        :until (null c)
+        :when (and (typep c 'instrumented-component)
+                   (slot-boundp c slot-name))
+        :append (slot-value c slot-name)))
 
-(defun make-dependency-space (component state dependency-space)
-  (dolist (dep (gethash component
-                        (slot-value state 'component-dependencies)))
-    (if (= 1 (incf (gethash dep dependency-space 0)))
-        (make-dependency-space dep
-                               state dependency-space))))
+;; Used by additional-dependencies*, overridden-dependencies*, and
+;; maybe-translated-component-name.
+(defun dwim-stringify-component-spec (component-spec)
+  (case (char component-spec 0)
+    ((#\# #\") ; is a subform, insert as-is
+     ;; of course, this fails if the first char of a pathname should
+     ;; be " or #. Let's hope nobody does that, ever.
+     component-spec)
+    (otherwise ; should be a string, make it one.
+     (concatenate 'string (string #\") component-spec (string #\")))))
 
-(defun cull-dependencies (component state)
-  (let ((dependency-space (make-hash-table)))
-    (make-dependency-space component state dependency-space)
-    (loop :for dep :in (cached-component-dependencies state component)
-          :if (= 1 (gethash dep dependency-space))
-            :collect dep)))
+;; Currently used only by output-component-file.
+(defun additional-dependencies* (component)
+  "Walk the tree up through all parent components and collect
+their :additional-dependencies."
+  (mapcar #'dwim-stringify-component-spec
+          (map-over-instrumented-component-and-parents component 'additional-dependencies)))
 
-(defun dependency-forms (state interesting-systems
-                         &key cull-redundant)
-  (let ((s-deps (slot-value state 'system-dependencies)))
-    (loop :for system :in interesting-systems
-          :collect `(,system
-                     :depends-on
-                     ,(loop :for d-sys :being :the :hash-keys
-                            :of (gethash system s-deps (make-hash-table))
-                            :collect d-sys)
-                     :components
-                     ,(loop :for comp :in (system-file-components system)
-                            :for deps = (if cull-redundant
-                                           (cull-dependencies comp state)
-                                           (cached-component-dependencies state comp))
-                            :collect `(,comp :depends-on ,deps))))))
+;; Currently used only by output-component-file.
+(defun overridden-dependencies* (component)
+  (mapcar #'dwim-stringify-component-spec
+          (map-over-instrumented-component-and-parents component 'overridden-dependencies)))
 
+;; Currently used only by output-component-file.
+(defun maybe-translated-component-name (component &key include-pathname)
+  (if (and (typep component 'instrumented-component)
+           (slot-boundp component 'translated-name))
+      (format nil "~A~@[ :pathname #.~S~]"
+              (dwim-stringify-component-spec
+               (slot-value component 'translated-name))
+              (and include-pathname
+                   (slot-value component 'translated-pathname)))
+      (enough-component-spec component include-pathname)))
+
+;; Used only by maybe-translated-component-class.
 (defun coerce-name (maybe-class)
   (if (typep maybe-class 'standard-class)
       (class-name maybe-class)
       maybe-class))
 
-(defun components-in-traverse-order (system compspecs
-                                     &optional (traverse-type 'asdf:load-op))
-  (let* ((op (make-instance traverse-type))
-         (opspecs (asdf::traverse op system))
-         (order-table (make-hash-table)))
-    (loop :for (op . component) :in opspecs
-          :for component-index :from 0
-          :do (setf (gethash component order-table) component-index))
-    (sort compspecs #'<
-          :key (lambda (c) (gethash (first c) order-table -1)))))
+;; Currently used only by output-component-file.
+(defun maybe-translated-component-class (component)
+  (cond
+    ;; standard instrumented component with no output
+    ;; file type, and default-component-type files are
+    ;; emitted as :file.
+    ((and (typep component 'instrumented-cl-source-file)
+          (not (slot-boundp component 'output-file-type)))
+     :file)
+    ((and (eql (class-of component)
+               (find-class (or
+                            (coerce-name
+                             (asdf::module-default-component-class
+                              (asdf:component-parent component)))
+                            'asdf:cl-source-file))))
+     :file)
+    ;; instrumented components with output file types emit
+    ;; their output file type
+    ((typep component 'instrumented-component)
+     (class-name (find-class (output-file-type component))))
+    ;; other types get their class name.
+    (t
+     (class-name (class-of component)))))
 
+;; Currently used only by initially-grovel-dependencies.
 (defun output-component-file (stream dependencies &key (output-systems-and-dependencies-p t))
   (let ((*print-case* :downcase))
     (format stream ";;; This file contains -*- lisp -*- expressions.~%")
@@ -610,144 +614,69 @@ after operating on a component).")
         (format stream "))~%")))
     (format stream "~&)~%")))
 
+;;;;;;;;;;;;;;;;;;;;;;;; Initially Grovel Dependencies ;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;; The actual groveling work:
+;; Everything below is used only by initially-grovel-dependencies.
 
-(defmacro with-new-groveling-environment ((verbose debug-object-types
-                                                   base-pathname)
-                                          &body body)
-  `(with-groveling-environment ((make-instance 'dependency-state)
-                                ,verbose ,debug-object-types ,base-pathname)
-     ,@body))
+;; Used only by cull-dependencies and dependency-forms.
+(defun cached-component-dependencies (state component)
+  (gethash component (slot-value state 'component-dependencies)))
 
-(defmacro with-groveling-environment ((state verbose debug-object-types
-					     base-pathname)
-                                            &body body)
-  `(let* ((*current-dependency-state* ,state)
-          (*features* (adjoin 'groveling *features*))
-          (*compile-print* ,verbose)
-          (*compile-verbose* ,verbose)
-          (*debug-object-types* ,debug-object-types)
-          (*default-pathname-defaults* ,base-pathname)
-          (*grovel-dir-suffix* (get-universal-time))
-          ;;(*break-on-signals* 'error)
-          (*suspected-variables* (slot-value *current-dependency-state*
-                                             'suspected-variables)))
-     ,@body))
+;; Used only by cull-dependencies.
+(defun make-dependency-space (component state dependency-space)
+  (dolist (dep (gethash component
+                        (slot-value state 'component-dependencies)))
+    (if (= 1 (incf (gethash dep dependency-space 0)))
+        (make-dependency-space dep
+                               state dependency-space))))
 
-(defun read-definition-from-asd (pathname)
-  (with-open-file (f pathname)
-    (let ((package (asdf::make-temporary-package)))
-      (loop :for expr = (let ((*package* package))
-                         (read f nil nil))
-            :until (null expr)
-            :do (cond ((consp expr)
-                      (case (first expr)
-                        (cl:in-package
-                         (setf *package* (find-package (second expr))))
-                        (asdf:defsystem
-                         (return-from read-definition-from-asd
-                           (getf (nthcdr 2 expr) :components))))))))))
+;; Used only by dependency-forms.
+(defun cull-dependencies (component state)
+  (let ((dependency-space (make-hash-table)))
+    (make-dependency-space component state dependency-space)
+    (loop :for dep :in (cached-component-dependencies state component)
+          :if (= 1 (gethash dep dependency-space))
+            :collect dep)))
 
-(defun dependency-forms-to-asdoid (systems)
-  (apply #'append
-         (mapcar
-          (lambda (sys)
-            (loop :for (comp nil deps) :in (getf (cdr sys) :components)
-                  :collect `(,(maybe-translated-component-class comp)
-                                   ,(enough-component-name-from-reader comp)
-                                   :depends-on ,(remove-duplicates
-                                                       `(,@(or (mapcar #'read-from-string
-                                                                       (overridden-dependencies* comp))
-                                                               (mapcar #'enough-component-name-from-reader deps))
-                                                           ,@(mapcar #'read-from-string
-                                                                     (additional-dependencies* comp)))
-                                                       :test #'equal))))
-          systems)))
+;; Currently used only by dependency-forms.
+(defun system-file-components (system)
+  "Flatten the tree of modules/components into a list that
+contains only the non-module components."
+  (loop :for component :in (asdf:module-components system)
+        :if (typep component 'asdf:module)
+          :append (system-file-components component)
+        :else
+          :collect component))
 
-(defun grovel-and-compare-dependencies (systems base-asd-file
-                                        interesting-systems
-                                        &key verbose debug-object-types
-                                        cull-redundant
-                                        output
-                                        (base-pathname
-                                         (truename
-                                          (make-pathname
-                                           :type nil
-                                           :name nil
-                                           :defaults *load-truename*))))
-  (with-new-groveling-environment (verbose debug-object-types base-pathname)
-    (dolist (system systems)
-      (with-groveling-macroexpand-hook
-          (asdf:oos 'asdf:load-op system :verbose verbose)))
-    (multiple-value-bind (depforms error-p)
-        (print-dependencies-comparison *standard-output* ;; also print to a file?
-                                       base-asd-file interesting-systems :cull-redundant cull-redundant)
-      (with-open-file (component-stream output
-                       :direction :output
-                       :if-does-not-exist :create
-                       :if-exists :supersede)
-        (output-component-file component-stream depforms :output-systems-and-dependencies-p nil))
-      error-p)))
+;; Currently used only by initially-grovel-dependencies.
+(defun dependency-forms (state interesting-systems
+                         &key cull-redundant)
+  (let ((s-deps (slot-value state 'system-dependencies)))
+    (loop :for system :in interesting-systems
+          :collect `(,system
+                     :depends-on
+                     ,(loop :for d-sys :being :the :hash-keys
+                            :of (gethash system s-deps (make-hash-table))
+                            :collect d-sys)
+                     :components
+                     ,(loop :for comp :in (system-file-components system)
+                            :for deps = (if cull-redundant
+                                           (cull-dependencies comp state)
+                                           (cached-component-dependencies state comp))
+                            :collect `(,comp :depends-on ,deps))))))
 
-(defun print-dependencies-comparison (stream base-asd-file interesting-systems
-                                      &key cull-redundant)
-    (symbol-macrolet ((state *current-dependency-state*))
-      (let* (missing-dependencies
-             redundant-deps
-             (depforms (dependency-forms state interesting-systems :cull-redundant cull-redundant))
-             (deps (dependency-forms-to-asdoid depforms))
-            ;; read the base asd file, assuming it contains one system:
-            (current-deps (read-definition-from-asd base-asd-file)))
-        ;; find missing/new components
-        (let* ((c-in-both (intersection deps current-deps :key #'second :test #'equal))
-               (c-missing-in-result (set-difference current-deps c-in-both :key #'second :test #'equal))
-               (c-missing-in-base (set-difference deps c-in-both :key #'second :test #'equal))
-               ;; component specs from both lists:
-               (my-comps (sort (remove-if-not (lambda (cs)
-                                                (member (second cs) c-in-both
-                                                        :key #'second :test #'equal))
-                                              deps)
-                               #'string<
-                               :key #'second))
-               (cur-comps (sort (remove-if-not (lambda (cs)
-                                                 (member (second cs) c-in-both
-                                                         :key #'second :test #'equal))
-                                               current-deps)
-                                #'string<
-                                :key #'second)))
-          (loop :for my-comp :in my-comps
-                :for cur-comp :in cur-comps
-                :for mc-deps = (getf my-comp :depends-on)
-                :for cc-deps = (getf cur-comp :depends-on)
-                :for cc-redundant-deps = (set-difference cc-deps mc-deps :test #'equal)
-                :for cc-missing-deps = (set-difference mc-deps cc-deps :test #'equal)
-                :do (assert (equal (second cur-comp) (second my-comp))
-                            (cur-comp my-comp))
-                :do (unless (null cc-redundant-deps)
-                      (push `(,(second cur-comp) ,@cc-redundant-deps) redundant-deps))
-                :do (unless (null cc-missing-deps)
-                      (push `(,(second cur-comp) ,@cc-missing-deps) missing-dependencies)))
-          (format stream "~:[~;~&Components only in ~A:~{~&     ~S~}~]"
-                  c-missing-in-result base-asd-file c-missing-in-result)
-          (format stream "~:[~;~&Components missing in ~A:~{~&     ~S~}~]"
-                  c-missing-in-base base-asd-file c-missing-in-base)
-          (format stream "~:[~;~&Unnecessary dependencies in ~A:~:{~&     ~S =>~@{ ~S~}~}~]"
-                  redundant-deps base-asd-file redundant-deps)
-          (format stream "~:[~;~&Missing dependencies in ~A:~&~:{~&     ~S =>~@{ ~S~}~}~]~%"
-                  missing-dependencies base-asd-file missing-dependencies)
-          (values depforms missing-dependencies)))))
-
+;; Used once in asdf-ops, but nowhere else.
 (defun initially-grovel-dependencies (systems stream
                                       interesting-systems
                                       &key verbose debug-object-types
                                       cull-redundant
                                       (base-pathname
-                                       (truename
-                                        (make-pathname
-                                         :type nil
-                                         :name nil
-                                         :defaults *load-truename*))))
+;;                                        (truename
+;;                                         (make-pathname
+;;                                          :type nil
+;;                                          :name nil
+;;                                          :defaults *load-truename*))
+                                       (error "doom doom doom")))
   ;; TODO: debug-object-types.
   (with-new-groveling-environment (verbose debug-object-types base-pathname)
     (let ((state *current-dependency-state*))
@@ -758,97 +687,6 @@ after operating on a component).")
                                     :cull-redundant cull-redundant)))
         (output-component-file stream deps))
       state)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Regroveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; This section is stuff that's only used for re-grovel-dependencies, which
-;; exists only to be exported.
-
-(defun dependency-op-done-p (component)
-  (let* ((input-files (asdf:input-files
-                       (make-instance 'asdf:compile-op)
-                       component))
-         (file (and input-files (probe-file (first input-files)))))
-    (cond ((null input-files)
-           t)
-          ((not
-            (or (null file)
-                (null (gethash component *component-dependency-op-times*))))
-           (< (file-write-date file)
-              (gethash component *component-dependency-op-times*))))))
-
-(defun update-component-order (state load-systems
-                               interesting-systems)
-  (with-slots (component-counter order-table) state
-     (setf component-counter 0)
-     (clrhash order-table)
-
-     (dolist (system interesting-systems)
-       ;; undo all load-ops for files:
-       (dolist (c (system-file-components system))
-         (remhash 'asdf:load-op (asdf::component-operation-times c))))
-     (delete-duplicates
-      (loop :for system :in load-systems
-            :append
-            (loop :for (op . c) :in (asdf::traverse (make-instance 'asdf:load-op)
-                                       system)
-                  :do (note-operating-on-component c state)
-                  :unless (dependency-op-done-p c)
-                  :collect c)))))
-
-;;; Re-groveling works like this:
-;;;  We keep a dependency state, which contains:
-;;;   * A table that maps forms to provider components
-;;;   * One that maps components to forms they use
-;;;   * One that assigns a compilation order to the components
-;;;  The last table is necessary to avoid cyclic dependencies: components
-;;;  can depend only on components that came before them in the compile order.
-;;;
-;;;  ADG finds out the new order of components (by tricking
-;;;  ADSF::TRAVERSE into thinking all operations on a system are
-;;;  un-done, and walking the emitted series of operations), then
-;;;  compiles and loads only those files that changed, updating the
-;;;  dependency state.
-;;;
-;;;  From that state, it generates the component list like the regular
-;;;  groveler.
-(defun re-grovel-dependencies (systems stream interesting-systems state
-                               &key verbose debug-object-types
-                               (base-pathname
-                                (truename
-                                 (make-pathname
-                                  :type nil
-                                  :name nil
-                                  :defaults *load-truename*))))
-  (with-groveling-environment (state verbose debug-object-types base-pathname)
-    (loop :with load-op = (make-instance 'asdf:load-op)
-          :with compile-op = (make-instance 'asdf:compile-op)
-          :for component :in (update-component-order state systems
-                                                     interesting-systems)
-          :do (with-groveling-macroexpand-hook
-               (handler-bind ((error
-                               (lambda (c)
-                                 (format *error-output*
-                                         "Caught error \"~A\" while re-groveling on ~
-                                   ~A. Continuing anyway.~%"
-                                         c component)
-                                 (invoke-restart 'continue-groveling))))
-
-                 (with-simple-restart (continue-groveling "Continue groveling with the next component after ~A" component)
-                   (operating-on-component (component :update-counter-p nil)
-                     (asdf:perform compile-op component)
-                     (asdf:perform load-op component))))))
-    (let ((deps (;; compute-dependencies
-                 dependency-forms state interesting-systems)))
-      (output-component-file stream deps))
-    state))
-
-(defun reload ()
-  "Reload the asdf-dependency-grovel system safely."
-  (let ((*macroexpand-hook* (if (boundp '*old-macroexpand-hook*)
-                                *old-macroexpand-hook*
-                                *macroexpand-hook*)))
-    (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -955,11 +793,11 @@ after operating on a component).")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defmacro with-non-asdf-groveling (&body body)
-  `(progn
-     (setf *non-asdf-p* t)
-     (with-new-groveling-environment (t () #p".")
-       ,@body)))
+;; (defmacro with-non-asdf-groveling (&body body)
+;;   `(progn
+;;      (setf *non-asdf-p* t)
+;;      (with-new-groveling-environment (t () #p".")
+;;        ,@body)))
 
 (defmacro instrumented-load (file)
   (with-gensyms (file!)
@@ -968,16 +806,18 @@ after operating on a component).")
            (operating-on-file-constituent (,file!)
              (with-groveling-macroexpand-hook
                (load ,file!)))
-           (operating-on-component (,file!)
-             (with-groveling-macroexpand-hook
-               (load ,file!)))))))
+           (error "instrumented-load only supports constituent groveling")))))
+;;            (operating-on-component (,file!)
+;;              (with-groveling-macroexpand-hook
+;;                (load ,file!)))))))
 
 (defmacro instrumented-compile-file (file &rest args)
   (let ((temp (gensym)))
     `(let ((,temp ,file))
-       (operating-on-component (,temp)
-         (with-groveling-macroexpand-hook
-           (compile-file ,file ,@args))))))
+       (error "instrumented-compile-file is no longer supported"))))
+;;        (operating-on-component (,temp)
+;;          (with-groveling-macroexpand-hook
+;;            (compile-file ,file ,@args))))))
 
 (defun print-big-ol-dependency-report (&key (state *current-dependency-state*)
                                             (stream t))
@@ -1101,9 +941,10 @@ after operating on a component).")
                          (with-groveling-macroexpand-hook
                            (eval sexpr)))))
                    (do-sexprs (sexpr i stream)
-                     (operating-on-component ((list filename i))
-                       (with-groveling-macroexpand-hook
-                         (eval sexpr)))))
+                     (error "hardcore instrumentation must use constituents")))
+;;                      (operating-on-component ((list filename i))
+;;                        (with-groveling-macroexpand-hook
+;;                          (eval sexpr)))))
                t)))
     (when (streamp pathspec)
       (return-from hardcore-instrumented-load (load-stream pathspec
@@ -1150,5 +991,202 @@ after operating on a component).")
                   (load-stream stream pathname))))))
       (with-open-file (stream pathname :external-format external-format)
         (load-stream stream pathname)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Dependency Comparison ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (defun enough-component-name-from-reader (c)
+;;   (read-from-string (maybe-translated-component-name c)))
+
+;; (defun read-definition-from-asd (pathname)
+;;   (with-open-file (f pathname)
+;;     (let ((package (asdf::make-temporary-package)))
+;;       (loop :for expr = (let ((*package* package))
+;;                          (read f nil nil))
+;;             :until (null expr)
+;;             :do (cond ((consp expr)
+;;                       (case (first expr)
+;;                         (cl:in-package
+;;                          (setf *package* (find-package (second expr))))
+;;                         (asdf:defsystem
+;;                          (return-from read-definition-from-asd
+;;                            (getf (nthcdr 2 expr) :components))))))))))
+
+;; ;; Used only by print-dependencies-comparison.
+;; (defun dependency-forms-to-asdoid (systems)
+;;   (apply #'append
+;;          (mapcar
+;;           (lambda (sys)
+;;             (loop :for (comp nil deps) :in (getf (cdr sys) :components)
+;;                   :collect `(,(maybe-translated-component-class comp)
+;;                                    ,(enough-component-name-from-reader comp)
+;;                                    :depends-on ,(remove-duplicates
+;;                                                        `(,@(or (mapcar #'read-from-string
+;;                                                                        (overridden-dependencies* comp))
+;;                                                                (mapcar #'enough-component-name-from-reader deps))
+;;                                                            ,@(mapcar #'read-from-string
+;;                                                                      (additional-dependencies* comp)))
+;;                                                        :test #'equal))))
+;;           systems)))
+
+;; ;; Used only by asdf:perform(compare-dependency-op, component-file).
+;; (defun grovel-and-compare-dependencies (systems base-asd-file
+;;                                         interesting-systems
+;;                                         &key verbose debug-object-types
+;;                                         cull-redundant
+;;                                         output
+;;                                         (base-pathname
+;;                                          (truename
+;;                                           (make-pathname
+;;                                            :type nil
+;;                                            :name nil
+;;                                            :defaults *load-truename*))))
+;;   (with-new-groveling-environment (verbose debug-object-types base-pathname)
+;;     (dolist (system systems)
+;;       (with-groveling-macroexpand-hook
+;;           (asdf:oos 'asdf:load-op system :verbose verbose)))
+;;     (multiple-value-bind (depforms error-p)
+;;         (print-dependencies-comparison *standard-output* ;; also print to a file?
+;;                                        base-asd-file interesting-systems :cull-redundant cull-redundant)
+;;       (with-open-file (component-stream output
+;;                        :direction :output
+;;                        :if-does-not-exist :create
+;;                        :if-exists :supersede)
+;;         (output-component-file component-stream depforms :output-systems-and-dependencies-p nil))
+;;       error-p)))
+
+;; ;; Used only by grovel-and-compare-dependencies.
+;; (defun print-dependencies-comparison (stream base-asd-file interesting-systems
+;;                                       &key cull-redundant)
+;;     (symbol-macrolet ((state *current-dependency-state*))
+;;       (let* (missing-dependencies
+;;              redundant-deps
+;;              (depforms (dependency-forms state interesting-systems :cull-redundant cull-redundant))
+;;              (deps (dependency-forms-to-asdoid depforms))
+;;             ;; read the base asd file, assuming it contains one system:
+;;             (current-deps (read-definition-from-asd base-asd-file)))
+;;         ;; find missing/new components
+;;         (let* ((c-in-both (intersection deps current-deps :key #'second :test #'equal))
+;;                (c-missing-in-result (set-difference current-deps c-in-both :key #'second :test #'equal))
+;;                (c-missing-in-base (set-difference deps c-in-both :key #'second :test #'equal))
+;;                ;; component specs from both lists:
+;;                (my-comps (sort (remove-if-not (lambda (cs)
+;;                                                 (member (second cs) c-in-both
+;;                                                         :key #'second :test #'equal))
+;;                                               deps)
+;;                                #'string<
+;;                                :key #'second))
+;;                (cur-comps (sort (remove-if-not (lambda (cs)
+;;                                                  (member (second cs) c-in-both
+;;                                                          :key #'second :test #'equal))
+;;                                                current-deps)
+;;                                 #'string<
+;;                                 :key #'second)))
+;;           (loop :for my-comp :in my-comps
+;;                 :for cur-comp :in cur-comps
+;;                 :for mc-deps = (getf my-comp :depends-on)
+;;                 :for cc-deps = (getf cur-comp :depends-on)
+;;                 :for cc-redundant-deps = (set-difference cc-deps mc-deps :test #'equal)
+;;                 :for cc-missing-deps = (set-difference mc-deps cc-deps :test #'equal)
+;;                 :do (assert (equal (second cur-comp) (second my-comp))
+;;                             (cur-comp my-comp))
+;;                 :do (unless (null cc-redundant-deps)
+;;                       (push `(,(second cur-comp) ,@cc-redundant-deps) redundant-deps))
+;;                 :do (unless (null cc-missing-deps)
+;;                       (push `(,(second cur-comp) ,@cc-missing-deps) missing-dependencies)))
+;;           (format stream "~:[~;~&Components only in ~A:~{~&     ~S~}~]"
+;;                   c-missing-in-result base-asd-file c-missing-in-result)
+;;           (format stream "~:[~;~&Components missing in ~A:~{~&     ~S~}~]"
+;;                   c-missing-in-base base-asd-file c-missing-in-base)
+;;           (format stream "~:[~;~&Unnecessary dependencies in ~A:~:{~&     ~S =>~@{ ~S~}~}~]"
+;;                   redundant-deps base-asd-file redundant-deps)
+;;           (format stream "~:[~;~&Missing dependencies in ~A:~&~:{~&     ~S =>~@{ ~S~}~}~]~%"
+;;                   missing-dependencies base-asd-file missing-dependencies)
+;;           (values depforms missing-dependencies)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Regroveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; This section is stuff that's only used for re-grovel-dependencies, which
+;; exists only to be exported.
+
+;; (defun dependency-op-done-p (component)
+;;   (let* ((input-files (asdf:input-files
+;;                        (make-instance 'asdf:compile-op)
+;;                        component))
+;;          (file (and input-files (probe-file (first input-files)))))
+;;     (cond ((null input-files)
+;;            t)
+;;           ((not
+;;             (or (null file)
+;;                 (null (gethash component *component-dependency-op-times*))))
+;;            (< (file-write-date file)
+;;               (gethash component *component-dependency-op-times*))))))
+
+;; (defun update-component-order (state load-systems
+;;                                interesting-systems)
+;;   (with-slots (component-counter order-table) state
+;;      (setf component-counter 0)
+;;      (clrhash order-table)
+
+;;      (dolist (system interesting-systems)
+;;        ;; undo all load-ops for files:
+;;        (dolist (c (system-file-components system))
+;;          (remhash 'asdf:load-op (asdf::component-operation-times c))))
+;;      (delete-duplicates
+;;       (loop :for system :in load-systems
+;;             :append
+;;             (loop :for (op . c) :in (asdf::traverse (make-instance 'asdf:load-op)
+;;                                        system)
+;;                   :do (note-operating-on-component c state)
+;;                   :unless (dependency-op-done-p c)
+;;                   :collect c)))))
+
+;;; Re-groveling works like this:
+;;;  We keep a dependency state, which contains:
+;;;   * A table that maps forms to provider components
+;;;   * One that maps components to forms they use
+;;;   * One that assigns a compilation order to the components
+;;;  The last table is necessary to avoid cyclic dependencies: components
+;;;  can depend only on components that came before them in the compile order.
+;;;
+;;;  ADG finds out the new order of components (by tricking
+;;;  ADSF::TRAVERSE into thinking all operations on a system are
+;;;  un-done, and walking the emitted series of operations), then
+;;;  compiles and loads only those files that changed, updating the
+;;;  dependency state.
+;;;
+;;;  From that state, it generates the component list like the regular
+;;;  groveler.
+
+;; (defun re-grovel-dependencies (systems stream interesting-systems state
+;;                                &key verbose debug-object-types
+;;                                (base-pathname
+;;                                 (truename
+;;                                  (make-pathname
+;;                                   :type nil
+;;                                   :name nil
+;;                                   :defaults *load-truename*))))
+;;   (error "doom re-grovel-dependencies")
+;;   (with-groveling-environment (state verbose debug-object-types base-pathname)
+;;     (loop :with load-op = (make-instance 'asdf:load-op)
+;;           :with compile-op = (make-instance 'asdf:compile-op)
+;;           :for component :in (update-component-order state systems
+;;                                                      interesting-systems)
+;;           :do (with-groveling-macroexpand-hook
+;;                (handler-bind ((error
+;;                                (lambda (c)
+;;                                  (format *error-output*
+;;                                          "Caught error \"~A\" while re-groveling on ~
+;;                                    ~A. Continuing anyway.~%"
+;;                                          c component)
+;;                                  (invoke-restart 'continue-groveling))))
+
+;;                  (with-simple-restart (continue-groveling "Continue groveling with the next component after ~A" component)
+;;                    (operating-on-component (component :update-counter-p nil)
+;;                      (asdf:perform compile-op component)
+;;                      (asdf:perform load-op component))))))
+;;     (let ((deps (;; compute-dependencies
+;;                  dependency-forms state interesting-systems)))
+;;       (output-component-file stream deps))
+;;     state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

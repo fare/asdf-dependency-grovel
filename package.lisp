@@ -3,7 +3,7 @@
 (cl:defpackage #:asdf-dependency-grovel
   (:use #:cl)
   (:export #:reload
-           #:component-file #:dependency-op #:compare-dependency-op
+           #:component-file #:dependency-op ;#:compare-dependency-op
            #:instrumented-cl-source-file
            #:instrumented-module
            #:instrumented-component #:additional-initargs
@@ -15,8 +15,9 @@
            ;; feature set when groveling:
            #:groveling
            ;; Added by msteele:
+           ;#:with-non-asdf-groveling
            #:instrumented-load #:instrumented-compile-file
-           #:with-non-asdf-groveling #:print-big-ol-dependency-report))
+           #:print-big-ol-dependency-report))
 
 (cl:defpackage #:asdf-dependency-grovel.packages
   (:use))

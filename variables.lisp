@@ -33,6 +33,7 @@
 (defvar *component-dependency-op-times* (make-hash-table)
   "Maps components to the last universal-time they were groveled.")
 
+;; Used by XCVB:
 (defvar *system-base-dir* nil
   "Designates the directory under which ADG will create its temporary directory
    for instrumented dependency-discovery FASLs.
