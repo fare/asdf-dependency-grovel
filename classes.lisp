@@ -72,6 +72,14 @@
 (defclass top-constituent (constituent)
   ())
 
+;; A constituent representing an ASDF component.
+(defclass asdf-component-constituent (constituent)
+  ((component
+    :initarg :component
+    :initform (error "must supply a component")
+    :reader asdf-component-constituent-component
+    :documentation "The ASDF component.")))
+
 ;; A constituent representing a file.
 (defclass file-constituent (constituent)
   ((path
@@ -98,6 +106,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Methods ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+
 (defgeneric constituent-designator (con)
   (:documentation "Return the unique designator of the constituent."))
 
@@ -108,9 +117,14 @@
 (defmethod constituent-designator ((con top-constituent))
   nil)
 
+(defmethod constituent-designator ((con asdf-component-constituent))
+  (cons (asdf:component-name (asdf-component-constituent-component con))
+        (constituent-designator (constituent-parent con))))
+
 (defmethod constituent-designator ((con file-constituent))
   (cons (file-constituent-path con)
         (constituent-designator (constituent-parent con))))
+
 
 (defgeneric constituent-summary (con)
   (:documentation "Return a summary of the identity of the constituent."))
@@ -121,6 +135,7 @@
 (defmethod constituent-summary ((con form-constituent))
   (list (constituent-designator con)
         (form-constituent-summary con)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -170,6 +185,7 @@
       (constituent-add-use use con))))
 
 (defun constituent-provision-table (top)
+  "Create a table mapping things to constituents that provide them."
   (let ((table (make-hash-table :test 'equal)))
     (walk-constituents-preorder (con top)
       (dolist (provision (constituent-provisions con))

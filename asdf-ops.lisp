@@ -14,8 +14,8 @@ to the base of the system."
                                     (length (pathname-directory output-file))))))
     
     (list
-     (if (and (boundp '*old-macroexpand-hook*)
-              *old-macroexpand-hook*)
+     (if (or *current-constituent*
+             (and (boundp '*old-macroexpand-hook*) *old-macroexpand-hook*))
          (merge-pathnames
           (make-pathname :directory `(,@(pathname-directory system-base-dir)
                                       ,(format nil "asdf-dependency-grovel-tmp-~A"
@@ -29,17 +29,26 @@ to the base of the system."
 
 ;; Used only by with-dependency-tracking.
 (defun call-with-dependency-tracking (comp thunk)
-  (if *current-dependency-state*
-    (operating-on-component (comp)
-      (let ((file (namestring (merge-pathnames (asdf:component-pathname comp))))
-            (*readtable* (make-instrumented-readtable)))
-        (signal-user file 'file-component)
-        (noticing-*feature*-changes
-         (multiple-value-prog1 (funcall thunk)
-           (signal-new-internal-symbols)))))
-    (funcall thunk)))
+  (if *using-constituents*
+      (if *current-constituent*
+          (operating-on-asdf-component-constituent (comp)
+              ;((merge-pathnames (asdf:component-pathname comp)))
+            (with-groveling-macroexpand-hook
+              (funcall thunk)))
+          (funcall thunk))
+      (if *current-dependency-state*
+          (operating-on-component (comp)
+            (let ((file (namestring (merge-pathnames
+                                     (asdf:component-pathname comp))))
+                  (*readtable* (make-instrumented-readtable)))
+              (signal-user file 'file-component)
+              (noticing-*feature*-changes
+               (multiple-value-prog1
+                   (funcall thunk)
+                 (signal-new-internal-symbols)))))
+          (funcall thunk))))
 
-;; Exported.  Also used by emit-perform-method.
+;; Used only by emit-perform-method.
 (defmacro with-dependency-tracking (comp &body body)
   `(call-with-dependency-tracking ,comp #'(lambda () ,@body)))
 

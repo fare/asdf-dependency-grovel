@@ -11,7 +11,7 @@
            #:handle-macroexpansion #:define-macroexpand-handlers
            #:define-simple-macroexpand-handlers
            #:signal-user #:signal-provider
-           #:with-dependency-tracking
+           ;#:with-dependency-tracking
            ;; feature set when groveling:
            #:groveling
            ;; Added by msteele:
