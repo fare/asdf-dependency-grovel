@@ -70,7 +70,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(define-macroexpand-handlers (form) (defmacro define-method-combination)
+(define-macroexpand-handlers (form)
+    (defmacro define-method-combination)
   (signal-provider (second form) (first form))
   (does-not-macroexpand))
 
@@ -257,7 +258,8 @@
              ((not (null typespec))
               (signal-user typespec 'deftype)))))
 
-  (define-macroexpand-handlers (form) (handler-bind handler-case)
+  (define-macroexpand-handlers (form)
+      (handler-bind handler-case)
     (loop :for (condition . stuff) :in (if (eql 'handler-bind (first form))
                                            (second form)
                                            (cddr form))
@@ -265,17 +267,20 @@
             :do (traverse-subtypes condition))
     (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form) (deftype)
+  (define-macroexpand-handlers (form)
+      (deftype)
     (signal-provider (second form) 'deftype)
     (traverse-subtypes (fourth form))
     (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form) (typecase etypecase)
+  (define-macroexpand-handlers (form)
+      (typecase etypecase)
     (loop :for (typespec . rest) :in (cddr form)
           :do (traverse-subtypes typespec))
     (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form) (check-type)
+  (define-macroexpand-handlers (form)
+      (check-type)
     (traverse-subtypes (third form))
     (does-not-macroexpand)))
 
