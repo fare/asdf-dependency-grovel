@@ -19,8 +19,8 @@
   "Hash table containing the symbols that should be treated as if they were
    variables when used in forms.")
 
-(defvar *current-dependency-state* nil
-  "The state of dependency information for the current groveling run.")
+;; (defvar *current-dependency-state* nil
+;;   "The state of dependency information for the current groveling run.")
 
 (defvar *grovel-dir-suffix* nil
   "Bound to a value that is unique once per operating on each
@@ -100,13 +100,13 @@
 
 ;; Added by msteele:
 
-(defvar *non-asdf-p* nil
-  "When nil, assumes we're groveling ASDF-based code.
-   When non-nil, assumes we're groveling non-ASDF-based code.")
+;; (defvar *non-asdf-p* nil
+;;   "When nil, assumes we're groveling ASDF-based code.
+;;    When non-nil, assumes we're groveling non-ASDF-based code.")
 
-(defvar *using-constituents* nil
-  "When nil, assumes we're using the old representations.
-   When non-nil, assumes we're using constituents.")
+;; (defvar *using-constituents* nil
+;;   "When nil, assumes we're using the old representations.
+;;    When non-nil, assumes we're using constituents.")
 
 (defvar *current-constituent* nil
   "The lowest-level constituent that we are currently inside.")

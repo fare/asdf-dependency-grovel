@@ -29,24 +29,24 @@ to the base of the system."
 
 ;; Used only by with-dependency-tracking.
 (defun call-with-dependency-tracking (comp thunk)
-  (if *using-constituents*
+;;   (if *using-constituents*
       (if *current-constituent*
           (operating-on-asdf-component-constituent (comp)
               ;((merge-pathnames (asdf:component-pathname comp)))
             (with-groveling-macroexpand-hook
               (funcall thunk)))
-          (funcall thunk))
-      (if *current-dependency-state*
-          (operating-on-component (comp)
-            (let ((file (namestring (merge-pathnames
-                                     (asdf:component-pathname comp))))
-                  (*readtable* (make-instrumented-readtable)))
-              (signal-user file 'file-component)
-              (noticing-*feature*-changes
-               (multiple-value-prog1
-                   (funcall thunk)
-                 (signal-new-internal-symbols)))))
-          (funcall thunk))))
+          (funcall thunk)))
+;;       (if *current-dependency-state*
+;;           (operating-on-component (comp)
+;;             (let ((file (namestring (merge-pathnames
+;;                                      (asdf:component-pathname comp))))
+;;                   (*readtable* (make-instrumented-readtable)))
+;;               (signal-user file 'file-component)
+;;               (noticing-*feature*-changes
+;;                (multiple-value-prog1
+;;                    (funcall thunk)
+;;                  (signal-new-internal-symbols)))))
+;;           (funcall thunk))))
 
 ;; Used only by emit-perform-method.
 (defmacro with-dependency-tracking (comp &body body)
@@ -70,11 +70,11 @@ to the base of the system."
   ((last-grovel-state :initform nil)
    (load-system :initarg :load-systems)
    (merge-systems :initarg :merge-systems)
-   (cull-redundant :initarg :cull-redundant :initform nil)
+;;    (cull-redundant :initarg :cull-redundant :initform nil)
    (verbose :initarg :verbose :initform t)
    (output-file :initarg :output-file)
    (base-pathname :initarg :base-pathname)
-   (debug-object-types :initarg :debug-object-types :initform nil)
+;;    (debug-object-types :initarg :debug-object-types :initform nil)
    (base-asd-file :initarg :base-asd-file :initform nil)
    (additional-initargs
     :initarg :additional-initargs :initform nil
@@ -164,7 +164,7 @@ to the base of the system."
                                       :if-does-not-exist :create
                                       :if-exists :supersede)
       (with-slots (load-system merge-systems
-                   component-name-translation cull-redundant verbose
+                   component-name-translation verbose ;cull-redundant
                    additional-initargs base-pathname debug-object-types) c
          (let ((base-pathname
                 (or (and (slot-boundp c 'base-pathname)
@@ -196,8 +196,8 @@ to the base of the system."
                       component-stream
                       (mapcar #'asdf:find-system merge-systems)
                       :verbose verbose
-                      :cull-redundant cull-redundant
-                      :debug-object-types debug-object-types
+;;                      :cull-redundant cull-redundant
+;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
     (rename-file tmp-file-name (first (asdf:output-files op c)))))
 

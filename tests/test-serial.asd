@@ -17,6 +17,6 @@
                                :merge-systems (:test-serial-system)
                                :output-file "groveled-components.lisp"
                                :base-asd-file "groveled-components.output.asd"
-                               :cull-redundant t
+;;                               :cull-redundant t
                                :verbose t)))
 
