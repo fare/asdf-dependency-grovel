@@ -165,7 +165,8 @@ to the base of the system."
                                       :if-exists :supersede)
       (with-slots (load-system merge-systems
                    component-name-translation verbose ;cull-redundant
-                   additional-initargs base-pathname debug-object-types) c
+                   ; debug-object-types
+                   additional-initargs base-pathname) c
          (let ((base-pathname
                 (or (and (slot-boundp c 'base-pathname)
                          base-pathname)

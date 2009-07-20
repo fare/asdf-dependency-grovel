@@ -12,12 +12,12 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; ASDF Stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defvar *current-component* nil
-  "The currently loaded/compiled ASDF component")
+;; (defvar *current-component* nil
+;;   "The currently loaded/compiled ASDF component")
 
-(defvar *suspected-variables* nil
-  "Hash table containing the symbols that should be treated as if they were
-   variables when used in forms.")
+;; (defvar *suspected-variables* nil
+;;   "Hash table containing the symbols that should be treated as if they were
+;;    variables when used in forms.")
 
 ;; (defvar *current-dependency-state* nil
 ;;   "The state of dependency information for the current groveling run.")
@@ -26,12 +26,12 @@
   "Bound to a value that is unique once per operating on each
    dependency-groveling system.")
 
-(defvar *debug-object-types* nil
-  "List containing object type names (as string designators) for which
-   dependency information should be printed.")
+;; (defvar *debug-object-types* nil
+;;   "List containing object type names (as string designators) for which
+;;    dependency information should be printed.")
 
-(defvar *component-dependency-op-times* (make-hash-table)
-  "Maps components to the last universal-time they were groveled.")
+;; (defvar *component-dependency-op-times* (make-hash-table)
+;;   "Maps components to the last universal-time they were groveled.")
 
 ;; Used by XCVB:
 (defvar *system-base-dir* nil
