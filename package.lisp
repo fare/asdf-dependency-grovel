@@ -12,7 +12,7 @@
            #:additional-initargs
            #:read-component-file
            #:systems-in-configuration
-           #:handle-macroexpansion
+           ;;#:handle-macroexpansion
            #:define-macroexpand-handlers
            #:signal-user
            #:signal-provider

@@ -2,11 +2,12 @@
 
 (asdf:defsystem :test-serial-system
   :serial t
-  :components (
-               (:file "package")
+  :components ((:file "package")
+
                ;; simple stuff
                (:file "p-defmacro")
                (:file "p-define-method-combination")
+               (:file "p-feature")
 
                ;; setf
                (:file "p-define-setf-expander")
@@ -36,6 +37,7 @@
                (:file "u-defmacro")
                (:file "u-defmacro.indirect")
                (:file "u-define-method-combination")
+               (:file "u-feature")
 
                ;; setf
                (:file "u-define-setf-expander")

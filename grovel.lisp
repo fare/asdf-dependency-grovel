@@ -184,18 +184,16 @@ keeping declarations intact."
       (parse-body body :ignore-multiple-docstrings nil)
     `(,@decls ,doc ,form ,@(or body (list nil)))))
 
-;; Used only by call-with-dependency-tracking in asdf-ops.lisp.
 (defmacro noticing-*feature*-changes (&rest body)
   ;; naive implementation, doesn't really deal with removed features
-  (let ((old-features (gensym))
-        (new-feature (gensym))
-        (removed-feature (gensym)))
+  (with-gensyms (old-features feature)
     `(let ((,old-features (copy-list *features*)))
-       (prog1 (progn ,@body)
-              (dolist (,new-feature (set-difference *features* ,old-features))
-                (signal-provider ,new-feature 'feature))
-              (dolist (,removed-feature (set-difference ,old-features *features*))
-                (signal-provider ,removed-feature 'removed-feature))))))
+       (multiple-value-prog1
+           (progn ,@body)
+         (dolist (,feature (set-difference *features* ,old-features))
+           (signal-provider ,feature 'feature))
+         (dolist (,feature (set-difference ,old-features *features*))
+           (signal-provider ,feature 'removed-feature))))))
 
 (labels ((signal-feature (presentp feature)
            (signal-user feature
@@ -278,7 +276,7 @@ keeping declarations intact."
                             ,new-macro-body ,env))
                 ,@,epilogue)))
 
-;; Used by instrumenting-macroexpand-hook, and also exported (not sure why).
+;; Used only by instrumenting-macroexpand-hook.
 (defun handle-macroexpansion (name form function environment)
   "Handle macroexpansion of a macro called `name' on `form' with macro function
    `function' in `environment'.  Either dispatch to the appropriate handler, or
@@ -657,7 +655,7 @@ keeping declarations intact."
                                              :component ,component!)))))
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
-       (progn ,@body))))
+       (noticing-*feature*-changes ,@body))))
 
 (defmacro operating-on-file-constituent ((path) &body body)
   "Used internally; not exported."
@@ -676,7 +674,7 @@ keeping declarations intact."
             (*previous-package* *package*)) ;; See Note [prev-package] below
        (assert (equal (constituent-designator ,con) ,designator))
        (multiple-value-prog1
-           (progn ,@body)
+           (noticing-*feature*-changes ,@body)
          (signal-new-internal-symbols :populate t)))))
 
 ;; Note [prev-package]: Notice that operating-on-file-constituent binds
@@ -706,7 +704,7 @@ keeping declarations intact."
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
        (multiple-value-prog1
-           (progn ,@body)
+           (noticing-*feature*-changes ,@body)
          (signal-new-internal-symbols :populate t)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Initially Grovel Dependencies ;;;;;;;;;;;;;;;;;;;;;;;;
@@ -765,7 +763,7 @@ keeping declarations intact."
   (let ((constituent-deps (constituent-dependency-table top))
         (component-deps (make-hash-table :test 'eql))
         (system-deps (make-hash-table :test 'eql)))
-    ;; Build dependency tables.
+    ;; Populate the component-deps and system-deps tables.
     (loop :for con1 :being :each :hash-key :of constituent-deps
           :using (:hash-value deps)
           :when (typep con1 'asdf-component-constituent) :do
@@ -777,7 +775,7 @@ keeping declarations intact."
               (pushnew (asdf:component-system comp2)
                        (gethash (asdf:component-system comp1) system-deps)
                        :test 'eql)))))
-    ;; Build and return dependency forms.
+    ;; Build and return the dependency forms.
     (loop :for system :in interesting-systems
           :collect `(,system
                      :depends-on ,(gethash system system-deps)
