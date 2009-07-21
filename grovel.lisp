@@ -63,7 +63,7 @@
   (let* ((op (make-instance traverse-type))
          (opspecs (asdf::traverse op system))
          (order-table (make-hash-table)))
-    (loop :for (op . component) :in opspecs
+    (loop :for (nil . component) :in opspecs
           :for component-index :from 0
           :do (setf (gethash component order-table) component-index))
     (sort compspecs #'<
