@@ -260,7 +260,7 @@
 
   (define-macroexpand-handlers (form)
       (handler-bind handler-case)
-    (loop :for (condition . stuff) :in (if (eql 'handler-bind (first form))
+    (loop :for (condition . nil) :in (if (eql 'handler-bind (first form))
                                            (second form)
                                            (cddr form))
           :unless (eql condition :no-error)
@@ -275,7 +275,7 @@
 
   (define-macroexpand-handlers (form)
       (typecase etypecase)
-    (loop :for (typespec . rest) :in (cddr form)
+    (loop :for (typespec . nil) :in (cddr form)
           :do (traverse-subtypes typespec))
     (does-not-macroexpand))
 
@@ -320,7 +320,7 @@
     ;; signal imports of symbols (they need to exist before they can
     ;; be imported)
     (when *check-internal-symbols-p*
-      (loop :for (clause-name pkg . symbols)
+      (loop :for (nil pkg . symbols)
             :in (remove-if-not (lambda (clause)
                                  (member (first clause)
                                          '(:import-from
@@ -358,7 +358,7 @@
 
 (define-macroexpand-handlers (form)
     (setf)
-  (loop :for (setee value) :on (cdr form) :by #'cddr
+  (loop :for (setee nil) :on (cdr form) :by #'cddr
         :do (cond
               ((consp setee)
                (signal-user (first setee) 'setf))
