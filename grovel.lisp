@@ -677,7 +677,7 @@
 ;; *previous-package*, because otherwise later forms in the same file wouldn't
 ;; observe the change to *previous-package* made by the in-package handler.
 
-(defmacro operating-on-form-constituent ((index &optional summary) &body body)
+(defmacro operating-on-form-constituent ((index pos summary) &body body)
   "Used internally; not exported."
   (with-gensyms (index! designator existing-con present-p con)
     `(let* ((,index! ,index)
@@ -689,6 +689,7 @@
                         (setf (gethash ,designator *constituent-table*)
                               (make-instance 'form-constituent
                                              :parent *current-constituent*
+                                             :position ,pos
                                              :summary ,summary)))))
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
@@ -939,7 +940,7 @@
                      (fine-grain-instrumented-load-as-source stream
                                                              filename)))))
            (fine-grain-instrumented-load-as-source (stream filename)
-             (macrolet ((do-sexprs ((sexpr index stream) &body body)
+             (macrolet ((do-sexprs ((sexpr index pos stream) &body body)
                           (sb-int:aver (symbolp sexpr))
                           (sb-int:aver (symbolp index))
                           (sb-int:with-unique-names (source-info)
@@ -954,9 +955,14 @@
                                             ,source-info) ,stream)
                                      (sb-c::do-forms-from-info
                                          ((,sexpr current-index) ,source-info)
-                                       (let ((,index current-index))
+                                       (let ((,index current-index)
+                                             (,pos (nth-value 1
+                                                     (sb-c::find-source-root
+                                                      current-index
+                                                      ,source-info))))
                                          ,@body)))
                                    (do ((,index 0 (1+ ,index))
+                                        (,pos nil) ;; TODO handle this case
                                         (,sexpr
                                          (read ,stream nil sb-int:*eof-object*)
                                          (read ,stream nil sb-int:*eof-object*)))
@@ -964,8 +970,9 @@
                                      ,@body))))))
 ;;                (if *using-constituents*
                    (operating-on-file-constituent (filename)
-                     (do-sexprs (sexpr i stream)
-                       (operating-on-form-constituent (i (summarize-form sexpr))
+                     (do-sexprs (sexpr i p stream)
+                       (operating-on-form-constituent
+                           (i p (summarize-form sexpr))
                          (with-groveling-macroexpand-hook
                            (eval sexpr)))))
 ;;                    (do-sexprs (sexpr i stream)

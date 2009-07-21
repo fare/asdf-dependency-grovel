@@ -91,7 +91,12 @@
 ;; A constituent representing a Lisp form.  The constituent for a top-level
 ;; form would generally have a file-constituent as a parent.
 (defclass form-constituent (constituent)
-  ((summary
+  ((position
+    :initarg :position
+    :initform nil
+    :reader form-constituent-position
+    :documentation "The position in the file at which the form starts.")
+   (summary
     :initarg :summary
     :initform nil
     :reader form-constituent-summary
@@ -134,6 +139,7 @@
 
 (defmethod constituent-summary ((con form-constituent))
   (list (constituent-designator con)
+        (form-constituent-position con)
         (form-constituent-summary con)))
 
 
