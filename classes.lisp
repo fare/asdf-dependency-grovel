@@ -57,11 +57,11 @@
     :reader constituent-index
     :documentation "The index of this constituent within its parent (if any).")
    (uses
-    :initform nil
+    :initform (make-hashset :test 'equal)
     :accessor constituent-uses
     :documentation "A list of things used by this constituent.")
    (provisions
-    :initform nil
+    :initform (make-hashset :test 'equal)
     :accessor constituent-provisions
     :documentation "A list of things provided by this constituent.")))
 
@@ -173,28 +173,24 @@
                 (constituent-descendant-p (constituent-parent con1) con2))))
 
 (defun constituent-add-use (use con)
-  (pushnew use
-           (constituent-uses con)
-           :test 'equal))
+  (hashset-add use (constituent-uses con)))
 
 (defun constituent-add-provision (provision con)
-  (pushnew provision
-           (constituent-provisions con)
-           :test 'equal))
+  (hashset-add provision (constituent-provisions con)))
 
 (defun propagate-constituent (con)
   (dolist (child (constituent-children con))
     (propagate-constituent child)
-    (dolist (provision (constituent-provisions child))
+    (do-hashset (provision (constituent-provisions child))
       (constituent-add-provision provision con))
-    (dolist (use (constituent-uses child))
+    (do-hashset (use (constituent-uses child))
       (constituent-add-use use con))))
 
 (defun constituent-provision-table (top)
   "Create a table mapping things to constituents that provide them."
   (let ((table (make-hash-table :test 'equal)))
     (walk-constituents-preorder (con top)
-      (dolist (provision (constituent-provisions con))
+      (do-hashset (provision (constituent-provisions con))
         (push con (gethash provision table))))
     table))
 
@@ -205,7 +201,7 @@
     (walk-constituents-preorder (con top)
       (let ((subtable (make-hash-table :test 'eql)))
         (setf (gethash con table) subtable)
-        (dolist (use (constituent-uses con))
+        (do-hashset (use (constituent-uses con))
           (dolist (dep (gethash use provisions))
             (unless (or (constituent-descendant-p con dep)
                         (constituent-descendant-p dep con))
