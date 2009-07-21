@@ -831,17 +831,24 @@
 (defun print-constituent-file-splitting-strategy (&key (stream t))
   (let ((graph (build-merged-graph *current-constituent*))
         (parent-map (make-hash-table :test 'eql))
-        (*print-pretty* nil))
+        (*print-pretty* nil)) ;; Don't insert newlines when formatting sexps!
     (do-hashset (dnode graph)
       (push dnode (gethash (dnode-parent dnode) parent-map)))
+    (format stream "~&FILE SPLITTING STRATEGY~%")
     (loop :for parent :being :each :hash-key :of parent-map
           :using (:hash-value dnodes)
           :when (> (length dnodes) 1) :do
-       (format stream "~&~S~%" (constituent-summary parent))
+       (format stream "~S~%" (constituent-summary parent))
        (dolist (dnode dnodes)
          (format stream "  dnode:~%")
          (do-hashset (con (dnode-constituents dnode))
-           (format stream "    ~S~%" (constituent-summary con)))))))
+           (format stream "    ~S~%" (constituent-summary con)))))
+    (format stream "TOPOLOGICAL SORT~%")
+    (dolist (dnode (topologically-sort-graph graph))
+      (format stream "~S~%"
+              (cons (loop-hashset (con (dnode-constituents dnode))
+                       :minimize (constituent-index con))
+                    (constituent-designator (dnode-parent dnode)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

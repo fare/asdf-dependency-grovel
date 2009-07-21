@@ -29,15 +29,26 @@
 (defun hashset-remove (item hashset)
   "Remove an item from the hashset."
   (remhash item hashset))
+(defmacro loop-hashset ((item hashset) &rest rest)
+  "Loop macro for hashsets."
+  `(loop :for ,item :being :the :hash-keys :in ,hashset
+      ,@rest))
 (defmacro do-hashset ((item hashset) &body body)
   "Like dolist, but for hashsets."
-  `(loop :for ,item :being :the :hash-keys :in ,hashset
+  `(loop-hashset (,item ,hashset)
+      ;;:for ,item :being :the :hash-keys :in ,hashset
       :do (progn ,@body)))
 (defun hashset-pop (hashset)
   "Remove and return an arbitrary item from the hashset."
   (do-hashset (k hashset)
     (hashset-remove k hashset)
     (return-from hashset-pop k)))
+(defun hashset-subset-p (set1 set2)
+  "Return t if `set1' is a subset of `set2', nil otherwise."
+  (do-hashset (item set1)
+    (unless (hashset-contains-p item set2)
+      (return-from hashset-subset-p nil)))
+  t)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -328,5 +339,44 @@
             (when (try-to-merge-dnodes graph dnode1 dnode2)
               (hashset-remove dnode2 dnode-set))))))
     graph))
+
+(defun topologically-sort-graph (graph)
+  "Given an acyclic graph of nodes, return a list of the nodes in topological
+   order (that is, each node comes before all nodes that depend on it)."
+  (let ((sorted-list nil)
+        (finished (make-hashset :test 'eql)) ;; nodes in sorted-list
+        (enqueued (make-hashset :test 'eql)) ;; nodes ever to be in stack
+        (stack nil))
+    ;; Initialize stack to all nodes that no other node depends on -- such
+    ;; nodes can safely come at the _end_ of the list, and thus can be _pushed_
+    ;; onto sorted-list _first_.
+    (do-hashset (dnode graph)
+      (when (hashset-empty-p (dnodes-that-depend-on dnode))
+        (hashset-add dnode enqueued)
+        (push dnode stack)))
+    ;; Work until the stack has been emptied.
+    (do () ((null stack))
+      ;; Pop the next item off the stack, and push it onto sorted-list.
+      (let ((dnode (pop stack)))
+        (assert (hashset-contains-p dnode enqueued))
+        (assert (not (hashset-contains-p dnode finished)))
+        (hashset-add dnode finished)
+        (push dnode sorted-list)
+        ;; Now that this node is in sorted-list, examine nodes that depend on
+        ;; this one.  Enqueue any such nodes that 1) have never been enqueued,
+        ;; and 2) are not depended on by anything that isn't already in
+        ;; sorted-list.  Each node in the graph will thus be enqueued just
+        ;; after the last node that depends on it is enqueued.
+        (do-hashset (other (dnodes-needed-by dnode))
+          (when (and (not (hashset-contains-p other enqueued))
+                     (hashset-subset-p (dnodes-that-depend-on other) finished))
+            (hashset-add other enqueued)
+            (push other stack)))))
+    ;; When we're done, every node from the graph should now be in sorted-list,
+    ;; in topological order.
+    (assert (= (length sorted-list) (hashset-count graph)))
+    (assert (or (null sorted-list)
+                (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
+    sorted-list))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
