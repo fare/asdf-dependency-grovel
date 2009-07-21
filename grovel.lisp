@@ -1,18 +1,9 @@
 
-;;; at least for the mcclim system.
-
 #+xcvb (module (:depends-on ("variables" "classes" "asdf-classes")))
 
 (cl:in-package #:asdf-dependency-grovel)
 
-;;; macroexpand hook and helper functions/macros
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; ;; Currently unused.
-;; (defun debug-print (string value)
-;;   (format *debug-io* ";; D: ~A ~S~%" string value)
-;;   value)
 
 ;; Used in a number of places, but not exported.
 (eval-when (:compile-toplevel :load-toplevel)
@@ -178,8 +169,8 @@
 ;; Used by several handlers (but not exported).
 (defun instrument-defun-body (body form)
   "Insert FORM into list of defun body forms BODY such that the
-return value of BODY is the same as it would be without FORM,
-keeping declarations intact."
+   return value of BODY is the same as it would be without FORM,
+   keeping declarations intact."
   (multiple-value-bind (body decls doc)
       (parse-body body :ignore-multiple-docstrings nil)
     `(,@decls ,doc ,form ,@(or body (list nil)))))
@@ -256,10 +247,8 @@ keeping declarations intact."
                                                 '*old-macroexpand-hook*))
                             new-macro-body)
   `(values t (let ((*macroexpand-hook* ,macroexpand-hook))
-               ;;(debug-print "Macroexpanding into"
                (funcall *old-macroexpand-hook* ,function
-                        ,new-macro-body ,env))));)
-
+                        ,new-macro-body ,env))))
 
 ;; Much like `does-macroexpand', but takes an additional `epilogue' parameter
 ;; that should be a list of forms.  These forms will be inserted after the
@@ -797,6 +786,7 @@ keeping declarations intact."
 ;;   (if (or t *using-constituents*)
       (let ((*compile-print* verbose)
             (*compile-verbose* verbose)
+            (*load-verbose* verbose)
             (*default-pathname-defaults* base-pathname)
             (*grovel-dir-suffix* (get-universal-time))
             (*readtable* (make-instrumented-readtable)))
@@ -854,35 +844,19 @@ keeping declarations intact."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; (defmacro with-non-asdf-groveling (&body body)
-;;   `(progn
-;;      (setf *non-asdf-p* t)
-;;      (with-new-groveling-environment (t () #p".")
-;;        ,@body)))
-
 (defmacro instrumented-load (file &rest args)
   (with-gensyms (file!)
     `(let ((,file! ,file))
-;;        (if *using-constituents*
-           (operating-on-file-constituent (,file!)
-             (with-groveling-macroexpand-hook
-               (load ,file! ,@args))))))
-;;            (error "instrumented-load only supports constituents")))))
-;;            (operating-on-component (,file!)
-;;              (with-groveling-macroexpand-hook
-;;                (load ,file!)))))))
+       (operating-on-file-constituent (,file!)
+         (with-groveling-macroexpand-hook
+           (load ,file! ,@args))))))
 
 (defmacro instrumented-compile-file (file &rest args)
   (with-gensyms (file!)
     `(let ((,file! ,file))
-;;        (if *using-constituents*
-           (operating-on-file-constituent (,file!)
-             (with-groveling-macroexpand-hook
-               (compile-file ,file! ,@args))))))
-;;        (error "instrumented-compile-file only supports constituents")))))
-;;        (operating-on-component (,temp)
-;;          (with-groveling-macroexpand-hook
-;;            (compile-file ,file ,@args))))))
+       (operating-on-file-constituent (,file!)
+         (with-groveling-macroexpand-hook
+           (compile-file ,file! ,@args))))))
 
 (defun print-big-ol-dependency-report (&key ;(state *current-dependency-state*)
                                             (stream t))
@@ -921,7 +895,7 @@ keeping declarations intact."
 ;;                     (format stream "    ~S~%" (reverse chain))
 ;;                     (push (cons dep chain) stack))))))))
 
-;;;;;;;;;;;;;;;;;;; Hardcore Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;; Fine-Grain Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;
 
 (defun summarize-form (form)
   (cond ((symbolp form) form)
@@ -934,16 +908,21 @@ keeping declarations intact."
                (t (format nil "(~S ...)" (car form)))))
         (t "(...)")))
 
+#-sbcl
+(defun fine-grain-instrumented-load (&rest args)
+  (declare (ignore args))
+  (error "fine-grain-instrumented-load is only implemented for SBCL"))
+
 ;; The below code was copied wholesale from the SBCL source code for the load
 ;; and load-as-source functions, and then modified.  It's definitely still in
 ;; "quick hack" status.
 
 #+sbcl
-(defun hardcore-instrumented-load (pathspec &key
-                                   (verbose *load-verbose*)
-                                   (print *load-print*)
-                                   (if-does-not-exist t)
-                                   (external-format :default))
+(defun fine-grain-instrumented-load (pathspec &key
+                                     (verbose *load-verbose*)
+                                     (print *load-print*)
+                                     (if-does-not-exist t)
+                                     (external-format :default))
   (labels ((load-stream (stream filename)
              (let* ((*readtable* *readtable*)
                     (*package* (sb-int:sane-package))
@@ -954,11 +933,12 @@ keeping declarations intact."
                                          (file-error () nil))))
                     (sb-fasl::*load-depth* (1+ sb-fasl::*load-depth*))
                     (sb-c::*policy* sb-c::*policy*))
-               (return-from hardcore-instrumented-load
+               (return-from fine-grain-instrumented-load
                  (if (equal (stream-element-type stream) '(unsigned-byte 8))
                      (sb-fasl::load-as-fasl stream verbose print)
-                     (hardcore-instrumented-load-as-source stream filename)))))
-           (hardcore-instrumented-load-as-source (stream filename)
+                     (fine-grain-instrumented-load-as-source stream
+                                                             filename)))))
+           (fine-grain-instrumented-load-as-source (stream filename)
              (macrolet ((do-sexprs ((sexpr index stream) &body body)
                           (sb-int:aver (symbolp sexpr))
                           (sb-int:aver (symbolp index))
@@ -989,14 +969,14 @@ keeping declarations intact."
                          (with-groveling-macroexpand-hook
                            (eval sexpr)))))
 ;;                    (do-sexprs (sexpr i stream)
-;;                      (error "hardcore instrumentation must use constituents")))
+;;                      (error "fine-grain instrumentation must use constituents")))
 ;;                      (operating-on-component ((list filename i))
 ;;                        (with-groveling-macroexpand-hook
 ;;                          (eval sexpr)))))
                t)))
     (when (streamp pathspec)
-      (return-from hardcore-instrumented-load (load-stream pathspec
-                                                           "<stream>")))
+      (return-from fine-grain-instrumented-load
+        (load-stream pathspec "<stream>")))
     (let ((pathname (pathname pathspec)))
       (with-open-stream
           (stream (or (open pathspec :element-type '(unsigned-byte 8)
@@ -1017,7 +997,7 @@ keeping declarations intact."
                                  "~@<Couldn't load ~S: file does not exist.~@:>"
                                  :format-arguments (list pathspec)))))
         (unless stream
-          (return-from hardcore-instrumented-load nil))
+          (return-from fine-grain-instrumented-load nil))
 
         (let* ((header-line (make-array
                              (length sb-fasl::*fasl-header-string-start-string*)
@@ -1035,7 +1015,7 @@ keeping declarations intact."
                          :expected sb-fasl::*fasl-header-string-start-string*)))
               (progn
                 (file-position stream :start)
-                (return-from hardcore-instrumented-load
+                (return-from fine-grain-instrumented-load
                   (load-stream stream pathname))))))
       (with-open-file (stream pathname :external-format external-format)
         (load-stream stream pathname)))))

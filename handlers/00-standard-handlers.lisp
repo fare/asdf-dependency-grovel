@@ -54,18 +54,18 @@
 ;;     (setf (gethash (second form) *suspected-variables*) t))
   (does-not-macroexpand))
 
-
 (define-macroexpand-handlers (form :environment env)
     (defconstant)
   (let ((symbol (second form)))
     (signal-provider (second form) (first form))
-    (does-macroexpand-with-epilogue
-     ((macro-function 'symbol-macroify) env)
-     `(symbol-macroify ,@form)
-     `((eval-when (:compile-toplevel :load-toplevel :execute)
-	 (setf (symbol-value ',symbol) ,symbol))
-       ',symbol))))
-
+    (if t ;; set to nil to disable defconstant instrumentation
+        (does-macroexpand-with-epilogue
+            ((macro-function 'symbol-macroify) env)
+          `(symbol-macroify ,@form)
+          `((eval-when (:compile-toplevel :load-toplevel :execute)
+              (setf (symbol-value ',symbol) ,symbol))
+            ',symbol))
+        (does-not-macroexpand))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
