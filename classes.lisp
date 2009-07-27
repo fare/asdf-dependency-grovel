@@ -134,7 +134,7 @@
   nil)
 
 (defmethod constituent-designator ((con asdf-component-constituent))
-  (cons (asdf:component-name (asdf-component-constituent-component con))
+  (cons (asdf:component-pathname (asdf-component-constituent-component con))
         (constituent-designator (constituent-parent con))))
 
 (defmethod constituent-designator ((con file-constituent))

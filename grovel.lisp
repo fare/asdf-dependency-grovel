@@ -633,7 +633,7 @@
   "Used internally; not exported."
   (with-gensyms (component! designator existing-con present-p con)
     `(let* ((,component! ,component)
-            (,designator (cons (asdf:component-name ,component!)
+            (,designator (cons (asdf:component-pathname ,component!)
                                (constituent-designator *current-constituent*)))
             (,con (multiple-value-bind (,existing-con ,present-p)
                       (gethash ,designator *constituent-table*)
@@ -644,7 +644,9 @@
                                              :component ,component!)))))
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
-       (noticing-*feature*-changes ,@body))))
+       (multiple-value-prog1
+	   (noticing-*feature*-changes ,@body)
+	 (signal-new-internal-symbols :populate t)))))
 
 (defmacro operating-on-file-constituent ((path) &body body)
   "Used internally; not exported."
