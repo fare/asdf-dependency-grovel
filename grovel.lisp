@@ -5,6 +5,12 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defun wtf (string &rest args)
+  "WTF stands for When-Trace-Format.  When *debug-trace* is non-nil, it will
+   format some debug info to stdout."
+  (when *debug-trace*
+    (apply #'format t (format nil "~&DEBUG: ~A~%" string) args)))
+
 ;; Used in a number of places, but not exported.
 (eval-when (:compile-toplevel :load-toplevel)
   (defun canonical-package-name (package-designator)
@@ -25,19 +31,25 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
-;; Currently used only by instrumenting-macroexpand-hook.
+;; Currently used only by preprocess-form.
 (defmacro walk-symbols ((sym form) &body body)
   "Visit each symbol in `form' one at a time, bind `sym' to that symbol, and
-   execute the body."
+   execute the body.  Note that this will not visit non-symbols, such as
+   numeric literals."
   (with-gensyms (visit walk node car cdr)
     `(labels ((,visit (,sym) ,@body)
               (,walk (,node)
                 (cond ((symbolp ,node)
                        (,visit ,node))
                       ((consp ,node)
-                       (loop :for (,car . ,cdr) :on ,node
-                             :do (,walk ,car)
-                             :if (symbolp ,cdr) :do (,visit ,cdr))))))
+                       (loop :for (,car . ,cdr) :on ,node :do
+                          (,walk ,car)
+                          ;; We need this next bit in case this is a dotted
+                          ;; list with a symbol as the final cdr.
+                          (when (and ,cdr (symbolp ,cdr))
+                            (,visit ,cdr))))
+                      ((vectorp ,node)
+                       (loop :for ,car :across ,node :do (,walk ,car))))))
        (,walk ,form))))
 
 ;; Exists only to be exported.
@@ -64,8 +76,6 @@
 
 ;; Used all over the place.
 (defun signal-provider (name form-type)
-;;                         &optional (*current-dependency-state*
-;;                                    *current-dependency-state*))
   "Signal that symbol `name' of kind `form-type' is being provided by the
    current component.  For example, (defun foo ...) would signal with `name'
    foo and `form-type' defun."
@@ -75,41 +85,20 @@
   (when (and (symbolp name)
              (eql (symbol-package name) (find-package :sb-impl)))
     (return-from signal-provider (values)))
-;;   (if *using-constituents*
-      (when (and *current-constituent*
-                 ;; FIXME defvar is problematic; turn it off for now
-                 (not (eql form-type 'defvar)))
-        (constituent-add-provision (list name form-type)
-                                   *current-constituent*))
-;;       (when (and *current-dependency-state* *current-component*)
-;;         (with-slots (providers component-counter) *current-dependency-state*
-;;           (push (list component-counter *current-component*)
-;;                 (gethash (list name form-type) providers)))))
+  (when *current-constituent*
+    (constituent-add-provision (list name form-type) *current-constituent*))
   (values))
 
 ;; Used all over the place.
 (defun signal-user (name form-type)
-;;                     &optional (*current-dependency-state*
-;;                                *current-dependency-state*))
   "Signal that symbol `name' of kind `form-type' is being used by the
    current component.  For example, (with-foo ...) might signal with `name'
    with-foo and `form-type' defmacro."
-;;   (if *using-constituents*
-      (when (and *current-constituent*
-                 ;; FIXME defvar is problematic; turn it off for now
-                 (not (eql form-type 'defvar)))
-        (constituent-add-use (list name form-type)
-                             *current-constituent*))
-;;       (when (and *current-dependency-state* *current-component*
-;;                ;; FIXME defvar is problematic; turn it off for non-ASDF for now
-;;                  (not (and *non-asdf-p* (eql form-type 'defvar))))
-;;         (with-slots (users component-counter) *current-dependency-state*
-;;           (setf (gethash *current-component* users)
-;;                 (gethash *current-component* users
-;;                          (make-hash-table :test #'equal)))
-;;           (setf (gethash (list name form-type)
-;;                          (gethash *current-component* users))
-;;                 component-counter))))
+  (when *current-constituent*
+    (let ((use (list name form-type)))
+      ;;(wtf "Signal user ~S ->~%          ~S" use
+      ;;     (constituent-summary *current-constituent*))
+      (constituent-add-use use *current-constituent*)))
   (values))
 
 ;; This function is part of the machinery for noticing dependencies due to
@@ -142,6 +131,49 @@
   `(progn
      (signal-user ',name 'define-symbol-macro)
      (setf ,expression ,new-value)))
+
+;; Experimental (msteele):
+;; (defun signal-variable-use (var-name kind value-name)
+;;   (signal-user var-name kind)
+;;   (symbol-value value-name))
+;; (defsetf signal-variable-use (var-name kind value-name) (new-value)
+;;   `(progn
+;;      (signal-user ,var-name ,kind)
+;;      (setf (symbol-value ,value-name) ,new-value)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Groveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Usually, with-groveling-readtable and with-groveling-macroexpand-hook are
+;; used together, but in fine-grain-instrumented-load they are used separately
+;; (the readtable is used when loading the stream, and the macroexpand-hook is
+;; applied separatedly on each form).
+
+(defmacro with-groveling-readtable (&body body)
+  `(let ((*readtable* (make-instrumented-readtable)))
+     ,@body))
+
+(defmacro with-groveling-macroexpand-hook (&body body)
+  "Turn on the groveling-macroexpand-hook within the body.  This macro is
+   idempotent, so it's safe to nest it."
+  `(let ((*old-macroexpand-hook* (or *old-macroexpand-hook*
+                                     *macroexpand-hook*))
+         (*macroexpand-hook* #'groveling-macroexpand-hook))
+     ,@body))
+
+;; (defmacro with-groveling-environment ((state verbose debug-object-types
+;; 					     base-pathname)
+;;                                             &body body)
+;;   `(let* ((*current-dependency-state* ,state)
+;;           (*features* (adjoin 'groveling *features*))
+;;           (*compile-print* ,verbose)
+;;           (*compile-verbose* ,verbose)
+;;           (*debug-object-types* ,debug-object-types)
+;;           (*default-pathname-defaults* ,base-pathname)
+;;           (*grovel-dir-suffix* (get-universal-time))
+;;           ;;(*break-on-signals* 'error)
+;;           (*suspected-variables* (slot-value *current-dependency-state*
+;;                                              'suspected-variables)))
+;;      ,@body))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Instrumentation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -186,6 +218,101 @@
          (dolist (,feature (set-difference ,old-features *features*))
            (signal-provider ,feature 'removed-feature))))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Form Preprocessing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Used only by check-for-transfers.
+(defun transfer-constituent (con)
+  "Add all provisions and uses in the given constituent to the current
+   constituent."
+  (wtf "Begin transfer ~S ->~%          ~S" (constituent-summary con)
+         (constituent-summary *current-constituent*))
+  (do-hashset (use (constituent-uses con))
+    (wtf "  Transfer-USE: ~S" use)
+    (constituent-add-use use *current-constituent*))
+  (do-hashset (provision (constituent-provisions con))
+    (wtf "  Transfer-PRO: ~S" provision)
+    (constituent-add-provision provision *current-constituent*))
+  (wtf "End transfer ~S ->~%          ~S" (constituent-summary con)
+         (constituent-summary *current-constituent*)))
+
+(defun check-for-transfers (form)
+  "Return a form similar to the one given, but replace
+   with-transfer-constituent subforms with their included results, while
+   transferring the included constituents."
+  (cond ((consp form)
+         (if (eql (first form) 'with-transfer-constituent)
+             ;; If the form is ('with-transfer-constituent con result), then
+             ;; transfer the constituent and replace the form with the result.
+             (progn (transfer-constituent (second form))
+                    (check-for-transfers (third form)))
+             ;; Otherwise, recurse on each member of the form.  There are a
+             ;; couple special cases we have to watch out for, which are
+             ;; commented below.
+             (loop :for (car . cdr) :on form
+                :if (consp cdr)
+                  ;; If the 'with-transfer-constituent appears in the middle of
+                  ;; the list, then it's most likely because someone wrote
+                  ;; something like (blah blah . #.(stuff)) -- that sort of
+                  ;; thing shows up in QPX.  Note that the below code is
+                  ;; carefully set up so that it will work regardless of
+                  ;; whether (third cdr) is a cons or not.
+                  :if (eql (first cdr) 'with-transfer-constituent)
+                    :do (transfer-constituent (second cdr)) :and
+                    :append (cons (check-for-transfers car)
+                                  (third cdr)) :into newform :and
+                    :do (return newform)
+                  :else
+                    :collect (check-for-transfers car) :into newform
+                  :end
+                ;; If cdr is not a cons cell, then we're at the end of the
+                ;; list.  If cdr is nil, then the :append below is equivalent
+                ;; to just saying :collect (check-for-transfers car), but if
+                ;; cdr is not nil (i.e. this is a dotted list), then it's
+                ;; important that we use the :append way.
+                :else
+                  :append (cons (check-for-transfers car) cdr) :into newform
+                :finally (return newform))))
+        ((vectorp form)
+         ;; Note that there are many slightly different sorts of vectors; using
+         ;; (type-of form) instead of just 'vector helps us use the right one.
+         (map (type-of form) #'check-for-transfers form))
+        (t form)))
+
+(defun preprocess-form (form)
+  "Walk the form, signaling any suspected variables or constants, and uses of
+   symbols from defpackages."
+  (let ((newform (check-for-transfers form)))
+    (walk-symbols (sym newform)
+      ;; If the symbol is in a package other than CL or KEYWORD, we should
+      ;; signal that we're using that package.
+      (let ((package (symbol-package sym)))
+        (unless (or (null package)
+                    (eql package (find-package :cl))
+                    (eql package (find-package :keyword)))
+          (signal-user (canonical-package-name package) 'defpackage)))
+      ;; If the symbol is a variable, we should signal that we're using
+      ;; that variable.
+      ;; XXX: heuristic, doesn't catch everything:
+      (when (hashset-contains-p sym *suspected-variables*)
+        (signal-user sym 'defvar))
+      (when (hashset-contains-p sym *suspected-constants*)
+        (signal-user sym 'defconstant)))
+    newform))
+
+;; Used by instrumented-sharpdot and fine-grain-instrumented-load.
+(defun instrumented-eval (form)
+  "Like eval, but preprocess the form first, and then eval it with the
+   groveling-macroexpand-hook in place."
+  (let ((newform (preprocess-form form))
+        ;; Bind *preprocess-form-p* to nil here so that the
+        ;; groveling-macroexpand-hook won't bother to preprocess any subforms
+        ;; of the form while we're evaluating.
+        (*preprocess-form-p* nil))
+    (with-groveling-macroexpand-hook
+      (eval newform))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Custom Readtable ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (labels ((signal-feature (presentp feature)
            (signal-user feature
                         (if presentp 'feature 'removed-feature)))
@@ -194,7 +321,8 @@
                (case (car x)
                  ((:not not)
                   (if (cddr x)
-                      (error "too many subexpressions in feature expression: ~S" x)
+                      (error "too many subexpressions in ~
+                              feature expression: ~S" x)
                       (not (featurep (cadr x)))))
                  ((:and and) (every #'featurep (cdr x)))
                  ((:or or) (some #'featurep (cdr x)))
@@ -206,7 +334,11 @@
          (guts (stream not-p)
            (unless (if (let ((*package* (find-package :keyword))
                              (*read-suppress* nil))
-                         (featurep (read stream t nil t)))
+                         ;; We have to use check-for-transfers here, because
+                         ;; someone might write, for example, #+#.(some-form).
+                         ;; For example, fare-utils does this.
+                         (featurep (check-for-transfers
+                                    (read stream t nil t))))
                        (not not-p)
                        not-p)
              (let ((*read-suppress* t))
@@ -221,19 +353,62 @@
 
 (defun instrumented-sharpquote (stream subchar numarg)
   (declare (ignore subchar numarg))
+  (when *read-suppress*
+    (read stream t nil t)
+    (return-from instrumented-sharpquote nil))
   (let ((function (read stream t nil t)))
-    (when (or (symbolp function)
-              (and (consp function) (eql 'setf (first function))))
-      (signal-user function 'defun))
-    `(function ,function)))
+    (if (or (symbolp function)
+            (and (consp function) (eql 'setf (first function))))
+        (let ((con (new-temp-constituent)))
+          (let ((*current-constituent* con))
+            (signal-user function 'defun))
+          `(with-transfer-constituent ,con (function ,function)))
+        `(function ,function))))
 
-(defun make-instrumented-readtable (&optional (readtable *readtable*))
-  (setf readtable (copy-readtable readtable))
-  (set-dispatch-macro-character #\# #\+ #'instrumented-sharp+ readtable)
-  (set-dispatch-macro-character #\# #\- #'instrumented-sharp- readtable)
-  (set-dispatch-macro-character #\# #\' #'instrumented-sharpquote readtable)
-  ;; TODO: #.
-  readtable)
+(defun instrumented-sharpdot (stream subchar numarg)
+  (declare (ignore subchar numarg))
+  (when *read-suppress*
+    (read stream t nil t)
+    (return-from instrumented-sharpdot nil))
+  (unless *read-eval*
+    (error "can't read #. while *READ-EVAL* is NIL"))
+  (let ((form (read stream t nil t))
+        (con (new-temp-constituent)))
+    (wtf "Entering sharpdot constituent: ~S" (constituent-summary con))
+    (let ((result (let ((*current-constituent* con))
+                    (instrumented-eval form))))
+      (wtf "Exiting sharpdot constituent: ~S" (constituent-summary con))
+      `(with-transfer-constituent ,con ,result))))
+
+(defun instrumented-sharp-S (stream subchar numarg)
+  (declare (ignore subchar numarg))
+  (when *read-suppress*
+    (read stream t nil t)
+    (return-from instrumented-sharp-S nil))
+  (let ((form (read stream t nil t))
+        (con (new-temp-constituent)))
+    (wtf "Entering sharp-S constituent: ~S" (constituent-summary con))
+    (let ((result (let* ((*current-constituent* con)
+                         (newform (preprocess-form form))
+                         (struct-name (car newform)))
+                    (signal-user struct-name 'defstruct)
+                    ;; This is a pretty rough approximation of the behavior of
+                    ;; the #S reader macro, but it'll do for now.
+                    (eval (cons (find-symbol (format nil "MAKE-~S" struct-name)
+                                             (symbol-package struct-name))
+                                (cdr newform))))))
+      (wtf "Exiting sharp-S constituent: ~S" (constituent-summary con))
+      `(with-transfer-constituent ,con ,result))))
+
+(defun make-instrumented-readtable ()
+  (let ((readtable (copy-readtable)))
+    (set-dispatch-macro-character #\# #\+ #'instrumented-sharp+     readtable)
+    (set-dispatch-macro-character #\# #\- #'instrumented-sharp-     readtable)
+    (set-dispatch-macro-character #\# #\' #'instrumented-sharpquote readtable)
+    (set-dispatch-macro-character #\# #\. #'instrumented-sharpdot   readtable)
+    (set-dispatch-macro-character #\# #\s #'instrumented-sharp-S    readtable)
+    (set-dispatch-macro-character #\# #\S #'instrumented-sharp-S    readtable)
+    readtable))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -250,6 +425,15 @@
                (funcall *old-macroexpand-hook* ,function
                         ,new-macro-body ,env))))
 
+(defmacro does-macroexpand-with-prologue
+    ((function env &key (macroexpand-hook '*old-macroexpand-hook*))
+     prologue new-macro-body)
+  `(values t `(progn
+                ,@,prologue
+                ,(let ((*macroexpand-hook* ,macroexpand-hook))
+                   (funcall *old-macroexpand-hook* ,function
+                            ,new-macro-body ,env)))))
+
 ;; Much like `does-macroexpand', but takes an additional `epilogue' parameter
 ;; that should be a list of forms.  These forms will be inserted after the
 ;; expanded `new-macro-body' within a progn.  The caller must make sure that
@@ -265,7 +449,7 @@
                             ,new-macro-body ,env))
                 ,@,epilogue)))
 
-;; Used only by instrumenting-macroexpand-hook.
+;; Used only by groveling-macroexpand-hook.
 (defun handle-macroexpansion (name form function environment)
   "Handle macroexpansion of a macro called `name' on `form' with macro function
    `function' in `environment'.  Either dispatch to the appropriate handler, or
@@ -281,191 +465,26 @@
                (does-not-macroexpand)))))
 
 ;; The hook itself.
-(defun instrumenting-macroexpand-hook (fun form env)
+(defun groveling-macroexpand-hook (fun form env)
   "A substitute for `*macroexpand-hook*' that provides the entry into the magic
    of asdf-dependency-grovel."
   (if (listp form)
       ;; If the form is a list, we're going to do some magic.
       (progn
-        ;; Step 1: Look over the symbols in the original form, in case we need
-        ;;         to signal a use of defpackage or defvar.
-        (walk-symbols (sym form)
-          ;; If the symbol is in a package other than CL or KEYWORD, we should
-          ;; signal that we're using that package.
-          (let ((package (symbol-package sym)))
-            (unless (or (null package)
-                        (eql package (find-package :cl))
-                        (eql package (find-package :keyword)))
-              (signal-user (canonical-package-name package) 'defpackage)))
-          ;; If the symbol is a variable, we should signal that we're using
-          ;; that variable.
-          ;; XXX: heuristic, doesn't catch everything:
-;;           (when (and (not *using-constituents*)
-;;                      (gethash sym *suspected-variables*))
-;;             (signal-user sym 'defvar))
-          )
+        ;; Step 1: Preprocess the form if necessary.
+        (when *preprocess-form-p*
+          (setf form (preprocess-form form)))
         ;; Step 2: Hand the form over to handle-macroexpansion, which will
         ;;         dispatch to the appropriate handler.
         (multiple-value-bind (replacep new-form)
             (handle-macroexpansion (first form) form fun env)
           ;; If the handler provided a replacement, use that, otherwise defer
           ;; to the old macroexpand hook.
-          (if replacep new-form
+          (if replacep
+              new-form
               (funcall *old-macroexpand-hook* fun form env))))
       ;; If the form is not a list, defer to the old macroexpand hook.
       (funcall *old-macroexpand-hook* fun form env)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Groveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defmacro with-groveling-macroexpand-hook (&body body)
-  ;; Needs to happen later, else we get problems with CLOS:
-  `(let ((*old-macroexpand-hook* *macroexpand-hook*)
-         (*macroexpand-hook* #'instrumenting-macroexpand-hook))
-     ,@body))
-
-;; ;; Currently used only by with-new-groveling-environment.
-;; (defmacro with-groveling-environment ((state verbose debug-object-types
-;; 					     base-pathname)
-;;                                             &body body)
-;;   `(let* ((*current-dependency-state* ,state)
-;;           (*features* (adjoin 'groveling *features*))
-;;           (*compile-print* ,verbose)
-;;           (*compile-verbose* ,verbose)
-;;           (*debug-object-types* ,debug-object-types)
-;;           (*default-pathname-defaults* ,base-pathname)
-;;           (*grovel-dir-suffix* (get-universal-time))
-;;           ;;(*break-on-signals* 'error)
-;;           (*suspected-variables* (slot-value *current-dependency-state*
-;;                                              'suspected-variables)))
-;;      ,@body))
-
-;; ;; Currently used only by initially-grovel-dependencies.
-;; (defmacro with-new-groveling-environment ((verbose debug-object-types
-;;                                                    base-pathname)
-;;                                           &body body)
-;;   `(with-groveling-environment ((make-instance 'dependency-state)
-;;                                 ,verbose ,debug-object-types ,base-pathname)
-;;      ,@body))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Dependency State ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; ;; Quick hack: some of these hash tables have been set to use equal instead of
-;; ;; eql in order to support non-ASDF groveling.  This makes things slower.
-;; ;; However, I have in mind some ideas for how to reorganize how
-;; ;; dependency-state works that will allow us to switch back to using eql;
-;; ;; hopefully I can do that a little later on.  (msteele)
-;; (defclass dependency-state ()
-;;      ((order-table
-;;        :initform (make-hash-table :test #'equal) ;; was eql
-;;        :documentation "maps components to their component-counter")
-;;       (providers
-;;        :initform (make-hash-table :test #'equal)
-;;        :documentation "maps form types and names to the defining
-;;        component and their component-counter.")
-;;       (users
-;;        :initform (make-hash-table :test #'equal) ;; was eql
-;;        :documentation "maps components to the forms they need.")
-;;       (component-counter
-;;        :initform 0
-;;        :documentation "counter to order the dependencies")
-;;       (component-dependencies
-;;        :initform (make-hash-table :test #'equal) ;; was eql
-;;        :documentation "Maps components to their dependencies (recomputed after
-;; operating on a component).")
-;;       (system-dependencies
-;;        :initform (make-hash-table :test #'eql)
-;;        :documentation "Maps systems to their system dependencies (recomputed
-;; after operating on a component).")
-;;       (suspected-variables :initform (make-hash-table))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;; Operating on Component ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; Everything below is used only by operating-on-component.
-
-;; ;; Currently used only by operating-on-component.
-;; (defun note-operating-on-component (component &optional
-;;                                     (*current-dependency-state*
-;;                                      *current-dependency-state*))
-;;   (when *current-dependency-state*
-;;     (with-slots (component-counter order-table) *current-dependency-state*
-;;        (unless (gethash component order-table)
-;;          (setf (gethash component order-table) (incf component-counter))))))
-
-;; ;; Used only by generate-form-providers and compute-dependencies-for-component.
-;; (defun get-counter-of (component state)
-;;   (with-slots (order-table) state
-;;      (gethash component order-table)))
-
-;; ;; Used only by compute-dependencies-for-component.
-;; (defun generate-form-providers (form state &key before generator)
-;;   (with-slots (providers) state
-;;     (loop :for (unreliable-count component) :in (gethash form providers)
-;;           :for count = (or (get-counter-of component state) -1)
-;;           :when (and component (or (null before) (> before count)))
-;;             :do (funcall generator component))))
-
-;; ;; Used only by compute-dependencies-for-component.
-;; (defun get-usage-of (component state)
-;;   (with-slots (users) state
-;;      (or (gethash component users)
-;;          (make-hash-table))))
-
-;; ;; Used only by recompute-dependencies-for.
-;; (defun compute-dependencies-for-component (component state
-;;                                    &key generator)
-;;   (let ((component-counter (get-counter-of component state)))
-;;     (loop :for form :being :the :hash-keys :of (get-usage-of component state)
-;;           :do (generate-form-providers
-;;                    form state
-;;                    :before (if *non-asdf-p* nil component-counter)
-;;                    :generator generator))
-;;     (values)))
-
-;; ;; Used only by operating-on-component.
-;; (defun recompute-dependencies-for (component)
-;;   (unless *current-dependency-state*
-;;     (return-from recompute-dependencies-for (values nil :no-state)))
-;;   (let* ((state *current-dependency-state*)
-;;          (c-deps (slot-value state 'component-dependencies))
-;;          (s-deps (if *non-asdf-p* nil
-;;                      (setf (gethash (asdf:component-system component)
-;;                                     (slot-value state 'system-dependencies))
-;;                            (gethash (asdf:component-system component)
-;;                                     (slot-value state 'system-dependencies)
-;;                                     (make-hash-table)))))
-;;          (c-dep-uniqueness (make-hash-table)))
-;;     (if *non-asdf-p*
-;;         ;; For non-ASDF groveling, do c-deps.setdefault(component, nil).
-;;         (setf (gethash component c-deps) (gethash component c-deps nil))
-;;         ;; For ASDF groveling, do c-deps[component] = nil.
-;;         (setf (gethash component c-deps) nil))
-;;     (compute-dependencies-for-component
-;;      component state
-;;      :generator (lambda (dep-c)
-;;                   (if *non-asdf-p*
-;;                       (unless (equal dep-c component)
-;;                         (pushnew dep-c (gethash component c-deps)
-;;                                  :test #'equal))
-;;                       ;; poor (in computation time) man's pushnew:
-;;                       (unless (gethash dep-c c-dep-uniqueness)
-;;                         (setf (gethash dep-c c-dep-uniqueness) t)
-;;                         (push dep-c (gethash component c-deps))
-;;                         ;; XXX: not sure if this will DTRT for re-groveling,
-;;                         ;; but that's secondary right now.
-;;                         (setf (gethash (asdf:component-system dep-c) s-deps)
-;;                               t)))))))
-
-;; ;; Currently used only by call-with-dependency-tracking.
-;; (defmacro operating-on-component ((component &key (update-counter-p t))
-;;                                   &body body)
-;;   `(let ((*current-component* ,component))
-;;      (when ,update-counter-p
-;;        (note-operating-on-component *current-component*))
-;;      (multiple-value-prog1
-;;        (progn ,@body)
-;;        (setf (gethash ,component *component-dependency-op-times*)
-;;              (get-universal-time))
-;;        (recompute-dependencies-for ,component))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Output Component File ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -611,12 +630,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro with-constituent-groveling (&body body)
-  `(let (
-;;          (*non-asdf-p* t) ;; TODO remove this eventually
-;;          (*using-constituents* t) ;; TODO remove this eventually
+  `(let (;; Set up tables for tracking variables and constants.
+         (*suspected-variables* (make-hashset :test 'eql))
+         (*suspected-constants* (make-hashset :test 'eql))
          ;; Initialize an fresh constituent environment.
          (*constituent-table* (make-hash-table :test #'equal))
-         (*current-constituent* (make-instance 'top-constituent :parent nil))
+         (*current-constituent* (make-instance 'top-constituent))
          ;; Set up machinery for checking internal symbols.
          (*previous-package* *package*)
          (*previously-interned-symbols*
@@ -626,8 +645,11 @@
             hashset))
          (*check-internal-symbols-p* t)
          ;; Indicate that we are groveling.
-         (*features* (adjoin 'groveling *features*)))
+         (*features* (adjoin :groveling *features*)))
      ,@body))
+
+;; TODO At some point, we may want to make a macro for making the various
+;;      operating-on-foo-constituent macros.
 
 (defmacro operating-on-asdf-component-constituent ((component) &body body)
   "Used internally; not exported."
@@ -644,9 +666,11 @@
                                              :component ,component!)))))
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
+       (wtf "Operating on ~S" (constituent-summary ,con))
        (multiple-value-prog1
 	   (noticing-*feature*-changes ,@body)
-	 (signal-new-internal-symbols :populate t)))))
+	 (signal-new-internal-symbols :populate t)
+         (wtf "Done operating on ~S" (constituent-summary ,con))))))
 
 (defmacro operating-on-file-constituent ((path) &body body)
   "Used internally; not exported."
@@ -664,9 +688,11 @@
             (*current-constituent* ,con)
             (*previous-package* *package*)) ;; See Note [prev-package] below
        (assert (equal (constituent-designator ,con) ,designator))
+       (wtf "Operating on ~S" (constituent-summary ,con))
        (multiple-value-prog1
            (noticing-*feature*-changes ,@body)
-         (signal-new-internal-symbols :populate t)))))
+         (signal-new-internal-symbols :populate t)
+         (wtf "Done operating on ~S" (constituent-summary ,con))))))
 
 ;; Note [prev-package]: Notice that operating-on-file-constituent binds
 ;; *previous-package* to *package*, and operating-on-form-constituent doesn't.
@@ -695,9 +721,11 @@
                                              :summary ,summary)))))
             (*current-constituent* ,con))
        (assert (equal (constituent-designator ,con) ,designator))
+       (wtf "Operating on ~S" (constituent-summary ,con))
        (multiple-value-prog1
            (noticing-*feature*-changes ,@body)
-         (signal-new-internal-symbols :populate t)))))
+         (signal-new-internal-symbols :populate t)
+         (wtf "Done operating on ~S" (constituent-summary ,con))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Initially Grovel Dependencies ;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -781,26 +809,21 @@
                                       stream
                                       interesting-systems
                                       &key verbose
-;;                                      debug-object-types
-;;                                      cull-redundant
                                       (base-pathname
                                        (error "must supply a base-pathname")))
-  ;; TODO: debug-object-types.
-;;   (if (or t *using-constituents*)
-      (let ((*compile-print* verbose)
-            (*compile-verbose* verbose)
-            (*load-verbose* verbose)
-            (*default-pathname-defaults* base-pathname)
-            (*grovel-dir-suffix* (get-universal-time))
-            (*readtable* (make-instrumented-readtable)))
-        (with-constituent-groveling
-          (dolist (system systems)
-            (operating-on-asdf-component-constituent (system)
-              (asdf:oos 'asdf:load-op system :verbose verbose)))
-          (let ((deps (constituent-dependency-forms *current-constituent*
-                                                    interesting-systems)))
-            (output-component-file stream deps))
-          *current-constituent*)))
+  (let ((*compile-print* verbose)
+        (*compile-verbose* verbose)
+        (*load-verbose* verbose)
+        (*default-pathname-defaults* base-pathname)
+        (*grovel-dir-suffix* (get-universal-time)))
+    (with-constituent-groveling
+      (dolist (system systems)
+        (operating-on-asdf-component-constituent (system)
+          (asdf:oos 'asdf:load-op system :verbose verbose)))
+      (let ((deps (constituent-dependency-forms *current-constituent*
+                                                interesting-systems)))
+        (output-component-file stream deps))
+      *current-constituent*)))
 ;;       (with-new-groveling-environment (verbose debug-object-types
 ;;                                        base-pathname)
 ;;         (let ((state *current-dependency-state*))
@@ -816,23 +839,29 @@
 
 (defun print-constituent-dependency-report (&key (stream t))
   (let ((constituent *current-constituent*))
-    (propagate-constituent constituent)
+    ;;(propagate-constituent-downward constituent)
+    (propagate-constituent-upward constituent)
     (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
           (dependency-table (constituent-dependency-table constituent)))
+      (format stream "~&DEPENDENCY REPORT~%")
       (loop :for con :being :the :hash-keys :in dependency-table
             :using (:hash-value dep-table) :do
          (progn
-           (format stream "~&c~S~%" (constituent-summary con))
+           (format stream "c~S~%" (constituent-summary con))
            (loop :for dep :being :the :hash-keys :in dep-table
                  :using (:hash-value reasons) :do
               (progn
                 (format stream "    d~S~%" (constituent-summary dep))
                 (dolist (reason reasons)
-                  (format stream "        ~{~S  (~S)~}~%" reason)))))))))
+                  (format stream "        ~{~S  (~S)~}~%" reason))))))
+      (format stream "GLOBAL MUTATIONS~%")
+      (dolist (mutation *global-mutations*)
+        (format stream "~S~%" mutation)))))
 
 (defun print-constituent-file-splitting-strategy (&key (stream t))
   (let ((graph (build-merged-graph *current-constituent*))
         (parent-map (make-hash-table :test 'eql))
+        (designator-map (make-hash-table :test 'eql))
         (*print-pretty* nil)) ;; Don't insert newlines when formatting sexps!
     (do-hashset (dnode graph)
       (push dnode (gethash (dnode-parent dnode) parent-map)))
@@ -845,12 +874,25 @@
          (format stream "  dnode:~%")
          (do-hashset (con (dnode-constituents dnode))
            (format stream "    ~S~%" (constituent-summary con)))))
-    (format stream "TOPOLOGICAL SORT~%")
-    (dolist (dnode (topologically-sort-graph graph))
-      (format stream "~S~%"
-              (cons (loop-hashset (con (dnode-constituents dnode))
-                       :minimize (constituent-index con))
-                    (constituent-designator (dnode-parent dnode)))))))
+    (do-hashset (dnode graph)
+      (setf (gethash dnode designator-map)
+            (cons (loop-hashset (con (dnode-constituents dnode))
+                     :minimize (constituent-index con))
+                  (constituent-designator (dnode-parent dnode)))))
+    (let ((file-constituents (get-file-constituents *current-constituent*)))
+      (format stream "ORIGINAL FILE ORDER~%")
+      (dolist (con file-constituents)
+        (format stream "~S~%" (constituent-summary con)))
+      (format stream "TOPOLOGICAL SORT~%")
+      (dolist (dnode (topologically-stable-sort-graph
+                      graph file-constituents))
+        (format stream "~S~%" (gethash dnode designator-map))))
+    (format stream "GRAPH DEPENDENCIES~%")
+    (do-hashset (dnode graph)
+      (format stream "c~S~%" (gethash dnode designator-map))
+      (do-hashset (other (dnodes-needed-by dnode))
+        (format stream "    d~S~%" (gethash other designator-map))))
+    (format stream "ALL DONE!~%")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -858,22 +900,21 @@
   (with-gensyms (file!)
     `(let ((,file! ,file))
        (operating-on-file-constituent (,file!)
-         (with-groveling-macroexpand-hook
-           (load ,file! ,@args))))))
+         (with-groveling-readtable
+           (with-groveling-macroexpand-hook
+             (load ,file! ,@args)))))))
 
 (defmacro instrumented-compile-file (file &rest args)
   (with-gensyms (file!)
     `(let ((,file! ,file))
        (operating-on-file-constituent (,file!)
-         (with-groveling-macroexpand-hook
-           (compile-file ,file! ,@args))))))
+         (with-groveling-readtable
+           (with-groveling-macroexpand-hook
+             (compile-file ,file! ,@args)))))))
 
-(defun print-big-ol-dependency-report (&key ;(state *current-dependency-state*)
-                                            (stream t))
-;;   (when *using-constituents*
-    (print-constituent-dependency-report :stream stream)
-    (print-constituent-file-splitting-strategy :stream stream))
-;;     (return-from print-big-ol-dependency-report))
+(defun print-big-ol-dependency-report (&key (stream t))
+  (print-constituent-dependency-report :stream stream)
+  (print-constituent-file-splitting-strategy :stream stream))
 ;;   (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
 ;;         (comp-deps (slot-value state 'component-dependencies))
 ;;         (providers (slot-value state 'providers))
@@ -943,11 +984,12 @@
                                          (file-error () nil))))
                     (sb-fasl::*load-depth* (1+ sb-fasl::*load-depth*))
                     (sb-c::*policy* sb-c::*policy*))
-               (return-from fine-grain-instrumented-load
-                 (if (equal (stream-element-type stream) '(unsigned-byte 8))
-                     (sb-fasl::load-as-fasl stream verbose print)
-                     (fine-grain-instrumented-load-as-source stream
-                                                             filename)))))
+               (with-groveling-readtable
+                 (return-from fine-grain-instrumented-load
+                   (if (equal (stream-element-type stream) '(unsigned-byte 8))
+                       (sb-fasl::load-as-fasl stream verbose print)
+                       (fine-grain-instrumented-load-as-source stream
+                                                               filename))))))
            (fine-grain-instrumented-load-as-source (stream filename)
              (macrolet ((do-sexprs ((sexpr index pos stream) &body body)
                           (sb-int:aver (symbolp sexpr))
@@ -977,18 +1019,10 @@
                                          (read ,stream nil sb-int:*eof-object*)))
                                        ((eq ,sexpr sb-int:*eof-object*))
                                      ,@body))))))
-;;                (if *using-constituents*
-                   (operating-on-file-constituent (filename)
-                     (do-sexprs (sexpr i p stream)
-                       (operating-on-form-constituent
-                           (i p (summarize-form sexpr))
-                         (with-groveling-macroexpand-hook
-                           (eval sexpr)))))
-;;                    (do-sexprs (sexpr i stream)
-;;                      (error "fine-grain instrumentation must use constituents")))
-;;                      (operating-on-component ((list filename i))
-;;                        (with-groveling-macroexpand-hook
-;;                          (eval sexpr)))))
+               (operating-on-file-constituent (filename)
+                 (do-sexprs (sexpr i p stream)
+                   (operating-on-form-constituent (i p (summarize-form sexpr))
+                     (instrumented-eval sexpr))))
                t)))
     (when (streamp pathspec)
       (return-from fine-grain-instrumented-load
@@ -1035,201 +1069,5 @@
                   (load-stream stream pathname))))))
       (with-open-file (stream pathname :external-format external-format)
         (load-stream stream pathname)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;; Dependency Comparison ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; (defun enough-component-name-from-reader (c)
-;;   (read-from-string (maybe-translated-component-name c)))
-
-;; (defun read-definition-from-asd (pathname)
-;;   (with-open-file (f pathname)
-;;     (let ((package (asdf::make-temporary-package)))
-;;       (loop :for expr = (let ((*package* package))
-;;                          (read f nil nil))
-;;             :until (null expr)
-;;             :do (cond ((consp expr)
-;;                       (case (first expr)
-;;                         (cl:in-package
-;;                          (setf *package* (find-package (second expr))))
-;;                         (asdf:defsystem
-;;                          (return-from read-definition-from-asd
-;;                            (getf (nthcdr 2 expr) :components))))))))))
-
-;; ;; Used only by print-dependencies-comparison.
-;; (defun dependency-forms-to-asdoid (systems)
-;;   (apply #'append
-;;          (mapcar
-;;           (lambda (sys)
-;;             (loop :for (comp nil deps) :in (getf (cdr sys) :components)
-;;                   :collect `(,(maybe-translated-component-class comp)
-;;                                    ,(enough-component-name-from-reader comp)
-;;                                    :depends-on ,(remove-duplicates
-;;                                                        `(,@(or (mapcar #'read-from-string
-;;                                                                        (overridden-dependencies* comp))
-;;                                                                (mapcar #'enough-component-name-from-reader deps))
-;;                                                            ,@(mapcar #'read-from-string
-;;                                                                      (additional-dependencies* comp)))
-;;                                                        :test #'equal))))
-;;           systems)))
-
-;; ;; Used only by asdf:perform(compare-dependency-op, component-file).
-;; (defun grovel-and-compare-dependencies (systems base-asd-file
-;;                                         interesting-systems
-;;                                         &key verbose debug-object-types
-;;                                         cull-redundant
-;;                                         output
-;;                                         (base-pathname
-;;                                          (truename
-;;                                           (make-pathname
-;;                                            :type nil
-;;                                            :name nil
-;;                                            :defaults *load-truename*))))
-;;   (with-new-groveling-environment (verbose debug-object-types base-pathname)
-;;     (dolist (system systems)
-;;       (with-groveling-macroexpand-hook
-;;           (asdf:oos 'asdf:load-op system :verbose verbose)))
-;;     (multiple-value-bind (depforms error-p)
-;;         (print-dependencies-comparison *standard-output* ;; also print to a file?
-;;                                        base-asd-file interesting-systems :cull-redundant cull-redundant)
-;;       (with-open-file (component-stream output
-;;                        :direction :output
-;;                        :if-does-not-exist :create
-;;                        :if-exists :supersede)
-;;         (output-component-file component-stream depforms :output-systems-and-dependencies-p nil))
-;;       error-p)))
-
-;; ;; Used only by grovel-and-compare-dependencies.
-;; (defun print-dependencies-comparison (stream base-asd-file interesting-systems
-;;                                       &key cull-redundant)
-;;     (symbol-macrolet ((state *current-dependency-state*))
-;;       (let* (missing-dependencies
-;;              redundant-deps
-;;              (depforms (dependency-forms state interesting-systems :cull-redundant cull-redundant))
-;;              (deps (dependency-forms-to-asdoid depforms))
-;;             ;; read the base asd file, assuming it contains one system:
-;;             (current-deps (read-definition-from-asd base-asd-file)))
-;;         ;; find missing/new components
-;;         (let* ((c-in-both (intersection deps current-deps :key #'second :test #'equal))
-;;                (c-missing-in-result (set-difference current-deps c-in-both :key #'second :test #'equal))
-;;                (c-missing-in-base (set-difference deps c-in-both :key #'second :test #'equal))
-;;                ;; component specs from both lists:
-;;                (my-comps (sort (remove-if-not (lambda (cs)
-;;                                                 (member (second cs) c-in-both
-;;                                                         :key #'second :test #'equal))
-;;                                               deps)
-;;                                #'string<
-;;                                :key #'second))
-;;                (cur-comps (sort (remove-if-not (lambda (cs)
-;;                                                  (member (second cs) c-in-both
-;;                                                          :key #'second :test #'equal))
-;;                                                current-deps)
-;;                                 #'string<
-;;                                 :key #'second)))
-;;           (loop :for my-comp :in my-comps
-;;                 :for cur-comp :in cur-comps
-;;                 :for mc-deps = (getf my-comp :depends-on)
-;;                 :for cc-deps = (getf cur-comp :depends-on)
-;;                 :for cc-redundant-deps = (set-difference cc-deps mc-deps :test #'equal)
-;;                 :for cc-missing-deps = (set-difference mc-deps cc-deps :test #'equal)
-;;                 :do (assert (equal (second cur-comp) (second my-comp))
-;;                             (cur-comp my-comp))
-;;                 :do (unless (null cc-redundant-deps)
-;;                       (push `(,(second cur-comp) ,@cc-redundant-deps) redundant-deps))
-;;                 :do (unless (null cc-missing-deps)
-;;                       (push `(,(second cur-comp) ,@cc-missing-deps) missing-dependencies)))
-;;           (format stream "~:[~;~&Components only in ~A:~{~&     ~S~}~]"
-;;                   c-missing-in-result base-asd-file c-missing-in-result)
-;;           (format stream "~:[~;~&Components missing in ~A:~{~&     ~S~}~]"
-;;                   c-missing-in-base base-asd-file c-missing-in-base)
-;;           (format stream "~:[~;~&Unnecessary dependencies in ~A:~:{~&     ~S =>~@{ ~S~}~}~]"
-;;                   redundant-deps base-asd-file redundant-deps)
-;;           (format stream "~:[~;~&Missing dependencies in ~A:~&~:{~&     ~S =>~@{ ~S~}~}~]~%"
-;;                   missing-dependencies base-asd-file missing-dependencies)
-;;           (values depforms missing-dependencies)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Regroveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; This section is stuff that's only used for re-grovel-dependencies, which
-;; exists only to be exported.
-
-;; (defun dependency-op-done-p (component)
-;;   (let* ((input-files (asdf:input-files
-;;                        (make-instance 'asdf:compile-op)
-;;                        component))
-;;          (file (and input-files (probe-file (first input-files)))))
-;;     (cond ((null input-files)
-;;            t)
-;;           ((not
-;;             (or (null file)
-;;                 (null (gethash component *component-dependency-op-times*))))
-;;            (< (file-write-date file)
-;;               (gethash component *component-dependency-op-times*))))))
-
-;; (defun update-component-order (state load-systems
-;;                                interesting-systems)
-;;   (with-slots (component-counter order-table) state
-;;      (setf component-counter 0)
-;;      (clrhash order-table)
-
-;;      (dolist (system interesting-systems)
-;;        ;; undo all load-ops for files:
-;;        (dolist (c (asdf-system-file-components system))
-;;          (remhash 'asdf:load-op (asdf::component-operation-times c))))
-;;      (delete-duplicates
-;;       (loop :for system :in load-systems
-;;             :append
-;;             (loop :for (op . c) :in (asdf::traverse (make-instance 'asdf:load-op)
-;;                                        system)
-;;                   :do (note-operating-on-component c state)
-;;                   :unless (dependency-op-done-p c)
-;;                   :collect c)))))
-
-;;; Re-groveling works like this:
-;;;  We keep a dependency state, which contains:
-;;;   * A table that maps forms to provider components
-;;;   * One that maps components to forms they use
-;;;   * One that assigns a compilation order to the components
-;;;  The last table is necessary to avoid cyclic dependencies: components
-;;;  can depend only on components that came before them in the compile order.
-;;;
-;;;  ADG finds out the new order of components (by tricking
-;;;  ADSF::TRAVERSE into thinking all operations on a system are
-;;;  un-done, and walking the emitted series of operations), then
-;;;  compiles and loads only those files that changed, updating the
-;;;  dependency state.
-;;;
-;;;  From that state, it generates the component list like the regular
-;;;  groveler.
-
-;; (defun re-grovel-dependencies (systems stream interesting-systems state
-;;                                &key verbose debug-object-types
-;;                                (base-pathname
-;;                                 (truename
-;;                                  (make-pathname
-;;                                   :type nil
-;;                                   :name nil
-;;                                   :defaults *load-truename*))))
-;;   (with-groveling-environment (state verbose debug-object-types base-pathname)
-;;     (loop :with load-op = (make-instance 'asdf:load-op)
-;;           :with compile-op = (make-instance 'asdf:compile-op)
-;;           :for component :in (update-component-order state systems
-;;                                                      interesting-systems)
-;;           :do (with-groveling-macroexpand-hook
-;;                (handler-bind ((error
-;;                                (lambda (c)
-;;                                  (format *error-output*
-;;                                          "Caught error \"~A\" while re-groveling on ~
-;;                                    ~A. Continuing anyway.~%"
-;;                                          c component)
-;;                                  (invoke-restart 'continue-groveling))))
-
-;;                  (with-simple-restart (continue-groveling "Continue groveling with the next component after ~A" component)
-;;                    (operating-on-component (component :update-counter-p nil)
-;;                      (asdf:perform compile-op component)
-;;                      (asdf:perform load-op component))))))
-;;     (let ((deps (;; compute-dependencies
-;;                  dependency-forms state interesting-systems)))
-;;       (output-component-file stream deps))
-;;     state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

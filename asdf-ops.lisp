@@ -29,13 +29,13 @@ to the base of the system."
 
 ;; Used only by with-dependency-tracking.
 (defun call-with-dependency-tracking (comp thunk)
-;;   (if *using-constituents*
-      (if *current-constituent*
-          (operating-on-asdf-component-constituent (comp)
-              ;((merge-pathnames (asdf:component-pathname comp)))
-            (with-groveling-macroexpand-hook
-              (funcall thunk)))
-          (funcall thunk)))
+  (if *current-constituent*
+      (operating-on-asdf-component-constituent (comp)
+        ;((merge-pathnames (asdf:component-pathname comp)))
+        (with-groveling-readtable
+          (with-groveling-macroexpand-hook
+            (funcall thunk))))
+      (funcall thunk)))
 ;;       (if *current-dependency-state*
 ;;           (operating-on-component (comp)
 ;;             (let ((file (namestring (merge-pathnames

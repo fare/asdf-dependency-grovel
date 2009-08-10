@@ -19,9 +19,7 @@
            #:instrumented-load
            #:instrumented-compile-file
            #:fine-grain-instrumented-load
-           #:print-big-ol-dependency-report
-           ;; Feature set when groveling:
-           #:groveling))
+           #:print-big-ol-dependency-report))
 
 (cl:defpackage #:asdf-dependency-grovel.packages
   (:use))

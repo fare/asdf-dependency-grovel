@@ -47,25 +47,75 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Variable-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
+;; (defvar *adg-specials* (make-hash-table :test 'eql))
+;; (defun special-substitute-name (name)
+;;   (or (gethash name *adg-specials*)
+;;       (setf (gethash name *adg-specials*)
+;;             (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-SPECIAL--~A" name)))))
+
+
+;; ;; When we hit a declaim, we need to watch out for special variable
+;; ;; declarations (all other declarations can be left as-is).  Once a name is
+;; ;; declared special, it can no longer be defined as a symbol macro; thus,
+;; ;; without this handler, things will break if someone declares a name special
+;; ;; before defvar-ing that name.
+;; (define-macroexpand-handlers (form :function fun :environment env)
+;;     (declaim)
+;;   (destructuring-bind (dec &rest claims) form
+;;     (loop :for claim :in claims :with new-names := nil
+;;        :if (equal (string (car claim)) "SPECIAL")
+;;          :do (setf new-names (mapcar #'special-substitute-name (cdr claim)))
+;;          :and :collect (cons (car claim) new-names)
+;;               :into new-claims
+;;          :and :append (let ((*macroexpand-hook* *old-macroexpand-hook*))
+;;                         (loop :for name :in (cdr claim)
+;;                               :for new-name :in new-names
+;;                            :collect (macroexpand-1
+;;                                      `(define-symbol-macro ,name
+;;                                           (signal-variable-use ',name 'defvar
+;;                                                                ',new-name)))))
+;;               :into epilogue
+;;        :else
+;;          :collect claim :into new-claims
+;;        :finally (return (does-macroexpand-with-epilogue (fun env)
+;;                           (cons dec new-claims)
+;;                           (nconc epilogue (list '(values))))))))
+
+
 (define-macroexpand-handlers (form)
     (defvar defparameter)
-  (signal-provider (second form) 'defvar)
-;;   (unless *using-constituents*
-;;     (setf (gethash (second form) *suspected-variables*) t))
-  (does-not-macroexpand))
+  (destructuring-bind (def name &rest rest) form
+    (hashset-add name *suspected-variables*)
+    (signal-provider name 'defvar)
+;;     (let ((new-name (special-substitute-name name)))
+;; ;;           (new-name (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-DEFVAR--~A"
+;; ;;                                      name))))
+;;       (does-macroexpand-with-prologue (fun env)
+;;         ;; Do a little dance to prevent ADG from thinking that this form is
+;;         ;; providing a symbol macro.  Probably a better solution would be to
+;;         ;; change does-macroexpand-with-prologue (and
+;;         ;; does-macroexpand-with-epilogue, while we're at it) to not apply
+;;         ;; handlers to the prologue/epilogue.
+;;         (let ((*macroexpand-hook* *old-macroexpand-hook*))
+;;           (list (macroexpand-1
+;;                  `(define-symbol-macro ,name
+;;                       (signal-variable-use ',name 'defvar ',new-name)))))
+;;         ;; Do the original defvar/defparameter, but with the new name.
+;;         `(,def ,new-name ,@rest)))))
+    (does-not-macroexpand)))
 
 (define-macroexpand-handlers (form :environment env)
     (defconstant)
   (let ((symbol (second form)))
-    (signal-provider (second form) (first form))
-    (if t ;; set to nil to disable defconstant instrumentation
-        (does-macroexpand-with-epilogue
-            ((macro-function 'symbol-macroify) env)
-          `(symbol-macroify ,@form)
-          `((eval-when (:compile-toplevel :load-toplevel :execute)
-              (setf (symbol-value ',symbol) ,symbol))
-            ',symbol))
-        (does-not-macroexpand))))
+    (signal-provider (second form) 'defconstant)
+    (hashset-add (second form) *suspected-constants*)
+;;         (does-macroexpand-with-epilogue
+;;             ((macro-function 'symbol-macroify) env)
+;;           `(symbol-macroify ,@form)
+;;           `((eval-when (:compile-toplevel :load-toplevel :execute)
+;;               (setf (symbol-value ',symbol) ,symbol))
+;;             ',symbol))
+    (does-not-macroexpand)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -79,7 +129,7 @@
 (define-macroexpand-handlers (form :function fun :environment env)
     (define-symbol-macro)
   (destructuring-bind (def name expansion) form
-    (signal-provider name def)
+    (signal-provider name 'define-symbol-macro)
     (does-macroexpand (fun env)
       `(,def ,name (signal-symbol-macroexpansion ',name ,expansion)))))
 
@@ -190,7 +240,12 @@
         (if (listp header) header (list header))
       ;; Provide the class and type for this struct.
       (signal-provider name 'defclass)
-      (signal-provider (second form) 'deftype)
+      (signal-provider name 'defstruct)
+      (signal-provider name 'deftype)
+      ;; Check for an :include struct option.
+      (let ((include-option (assoc :include struct-options)))
+        (when include-option
+          (signal-user (second include-option) 'defstruct)))
       ;; Deal with accessor functions.  The defstruct macro automatically
       ;; defines a whole bunch of accessor functions, which we must
       ;; "retroactively" instrument.  In particular, we must "manually"
@@ -362,18 +417,55 @@
         :do (cond
               ((consp setee)
                (signal-user (first setee) 'setf))
-              ((and (symbolp setee) (boundp setee))
+              #|((and (symbolp setee) (boundp setee))
                (signal-user setee 'defvar)
-               (signal-provider setee 'defvar))))
+               (signal-provider setee 'defvar))|#)
+            (when (hashset-contains-p setee *suspected-variables*)
+              (push (list (first form)
+                          setee
+                          (constituent-summary *current-constituent*))
+                    *global-mutations*)))
   (does-not-macroexpand))
 
 
-(define-macroexpand-handlers (form)
+(define-macroexpand-handlers (form :function fun :environment env)
     (pushnew push)
   (let ((setee (third form)))
-    (when (and (symbolp setee) (boundp setee))
-      (signal-user setee 'defvar)
-      (signal-provider setee 'defvar))))
+    (when (hashset-contains-p setee *suspected-variables*)
+      (push (list (first form)
+                  setee
+                  (constituent-summary *current-constituent*))
+            *global-mutations*))
+    (does-not-macroexpand)))
+
+
+;; (define-macroexpand-handlers (form :function fun :environment env)
+;;     (pushnew push)
+;;   (let ((setee (third form)))
+;;     (if (hashset-contains-p setee *suspected-variables*)
+;;         (with-gensyms (old-version new-version)
+;;           (assert (symbolp setee))
+;;           (does-macroexpand-with-prologue (fun env)
+;;             `((let* ((,old-version (gethash ,setee *variable-versions*))
+;;                      (,new-version (1+ ,old-version)))
+;;                 (signal-user (cons ,setee ,old-version) 'var-version)
+;;                 (signal-provider (cons ,setee ,new-version) 'var-version)
+;;                 (setf (gethash ,setee *variable-versions*) ,new-version)))
+;;             form))
+;;         (let* ((old-version (gethash setee *variable-versions*))
+;;                (new-version (1+ old-version)))
+;;           (signal-user (cons setee old-version) 'var-version)
+;;           (signal-provider (cons setee new-version) 'var-version)
+;;           (setf (gethash setee *variable-versions*) new-version)
+;;           )
+;;         (does-not-macroexpand))))
+
+;; (define-macroexpand-handlers (form)
+;;     (pushnew push)
+;;   (let ((setee (third form)))
+;;     (when (and (symbolp setee) (boundp setee))
+;;       (signal-user setee 'defvar)
+;;       (signal-provider setee 'defvar))))
 
 
 (define-macroexpand-handlers (form :function fun :environment env)

@@ -9,6 +9,9 @@
                (:file "p-define-method-combination")
                (:file "p-feature")
 
+               ;; defvar
+               (:file "p-defvar")
+
                ;; setf
                (:file "p-define-setf-expander")
                (:file "p-defsetf")
@@ -39,6 +42,12 @@
                (:file "u-define-method-combination")
                (:file "u-feature")
 
+               ;; defvar
+               (:file "u-defvar")
+               (:file "u-defvar.vector")
+               (:file "u-defvar.setf")
+               (:file "u-defvar.push")
+
                ;; setf
                (:file "u-define-setf-expander")
                (:file "u-defsetf")
@@ -56,6 +65,7 @@
                (:file "u-defstruct.defmethod")
                (:file "u-defstruct.functions")
                (:file "u-defstruct.functions.sharpquote")
+               (:file "u-defstruct.include")
 
                ;; package system
                (:file "u-defpackage")

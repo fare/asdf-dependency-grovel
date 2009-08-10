@@ -10,6 +10,76 @@
 (defmacro with-gensyms ((&rest names) &body body)
   `(let ,(mapcar #'(lambda (name) `(,name (gensym))) names) ,@body))
 
+(defmacro do-until (condition &body body)
+  `(do () (,condition) ,@body))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Heaps ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; A binary minheap, which can be used as a priority queue.
+(flet ((heap-key-function (heap) (car heap))
+       (heap-vector (heap) (cdr heap))
+       (parent-index (index) (values (floor (1- index) 2)))
+       (child-indices (index)
+         (let ((left (1+ (* 2 index))))
+           (values left (1+ left))))
+       (item-key (item) (car item))
+       (item-obj (item) (cdr item)))
+  (defun make-heap (&key key)
+    (unless key
+      (setf key (lambda (x) x)))
+    (cons key (make-array 0 :adjustable t :fill-pointer t)))
+  (defun heap-insert (obj heap)
+    (let* ((key (funcall (heap-key-function heap) obj))
+           (item (cons key obj))
+           (vec (heap-vector heap))
+           (index (vector-push-extend item vec)))
+      (do-until (= index 0)
+        (let ((pindex (parent-index index)))
+          (if (>= key (item-key (elt vec pindex)))
+              (return)
+              (psetf (elt vec index) (elt vec pindex)
+                     (elt vec pindex) (elt vec index)
+                     index pindex)))))
+    (values))
+  (defun heap-pop (heap)
+    (when (heap-empty-p heap)
+      (return-from heap-pop (values nil nil)))
+    (let* ((vec (heap-vector heap))
+           (min-obj (item-obj (elt vec 0)))
+           (item (vector-pop vec))
+           (length (fill-pointer vec)))
+      (when (> length 0)
+        (let ((key (item-key item))
+              (index 0))
+          (loop
+             (multiple-value-bind (lindex rindex) (child-indices index)
+               (cond ((>= lindex length)
+                      (return))
+                     ((>= rindex length)
+                      (if (<= key (item-key (elt vec lindex)))
+                          (return)
+                          (setf (elt vec index) (elt vec lindex)
+                                index lindex)))
+                     (t (let ((lkey (item-key (elt vec lindex)))
+                              (rkey (item-key (elt vec rindex))))
+                          (cond ((and (<= key lkey)
+                                      (<= key rkey))
+                                 (return))
+                                ((<= lkey rkey)
+                                 (setf (elt vec index) (elt vec lindex)
+                                       index lindex))
+                                (t
+                                 (setf (elt vec index) (elt vec rindex)
+                                       index rindex))))))))
+          (setf (elt vec index) item)))
+      (values min-obj t)))
+  (defun heap-count (heap)
+    (fill-pointer (heap-vector heap)))
+  (defun heap-empty-p (heap)
+    (= 0 (heap-count heap))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Hashsets ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; Hash-set abstraction, since CL doesn't seem to have a set datatype.
 (defun make-hashset (&key (test 'eql))
   "Create a new hashset with the specified test function."
@@ -36,7 +106,6 @@
 (defmacro do-hashset ((item hashset) &body body)
   "Like dolist, but for hashsets."
   `(loop-hashset (,item ,hashset)
-      ;;:for ,item :being :the :hash-keys :in ,hashset
       :do (progn ,@body)))
 (defun hashset-pop (hashset)
   "Remove and return an arbitrary item from the hashset."
@@ -55,7 +124,7 @@
 (defclass constituent ()
   ((parent
     :initarg :parent
-    :initform (error "must supply a parent")
+    :initform nil
     :reader constituent-parent
     :documentation "The parent constituent directly containing this one,
     or nil if the constituent has no parent.")
@@ -75,6 +144,13 @@
     :initform (make-hashset :test 'equal)
     :accessor constituent-provisions
     :documentation "A list of things provided by this constituent.")))
+
+(defmethod initialize-instance :after ((con constituent) &key)
+  (let ((parent (slot-value con 'parent)))
+    (when parent
+      (setf (slot-value con 'index)
+            (length (slot-value parent 'children)))
+      (push con (slot-value parent 'children)))))
 
 ;; The top-level constituent.  This is instantiated by
 ;; with-constituent-groveling, and will have a nil parent.  The only reason to
@@ -111,14 +187,25 @@
     :initarg :summary
     :initform nil
     :reader form-constituent-summary
-    :documentation "A human-readable sexp summarizing the form.")))
+    :documentation "A human-readable string summarizing the form.")))
 
-(defmethod initialize-instance :after ((con constituent) &key)
-  (let ((parent (slot-value con 'parent)))
-    (when parent
-      (setf (slot-value con 'index)
-            (length (slot-value parent 'children)))
-      (push con (slot-value parent 'children)))))
+;; A temporary constituent, typically made with a nil parent.  This is used to
+;; collect uses and provisions into one place (e.g. for sharpdot
+;; instrumentation) before adding them to another constituent using the
+;; transfer-constituent function.
+(defclass temp-constituent (constituent)
+  ((label
+    :initarg :label
+    :initform (error "must supply a label")
+    :reader temp-constituent-label
+    :documentation "The label to use as the summary of this constituent.")))
+
+(defun new-temp-constituent ()
+  "Create a new temp-constituent with an automatically generated label."
+  (make-instance 'temp-constituent
+                 :label (cons (gensym) (and *current-constituent*
+                                            (constituent-designator
+                                             *current-constituent*)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Methods ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -152,6 +239,9 @@
   (list (constituent-designator con)
         (form-constituent-position con)
         (form-constituent-summary con)))
+
+(defmethod constituent-summary ((con temp-constituent))
+  (temp-constituent-label con))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -189,9 +279,21 @@
 (defun constituent-add-provision (provision con)
   (hashset-add provision (constituent-provisions con)))
 
-(defun propagate-constituent (con)
+(defun propagate-constituent-downward (con)
+  "Copy all uses and provisions from the constituent to all its descendants,
+   and do the same for each descendant."
   (dolist (child (constituent-children con))
-    (propagate-constituent child)
+    (do-hashset (provision (constituent-provisions con))
+      (constituent-add-provision provision child))
+    (do-hashset (use (constituent-uses con))
+      (constituent-add-use use child))
+    (propagate-constituent-downward child)))
+
+(defun propagate-constituent-upward (con)
+  "Copy all uses and provisions from the constituent's descendants to it,
+   and do the same for each descendant."
+  (dolist (child (constituent-children con))
+    (propagate-constituent-upward child)
     (do-hashset (provision (constituent-provisions child))
       (constituent-add-provision provision con))
     (do-hashset (use (constituent-uses child))
@@ -213,17 +315,23 @@
       (let ((subtable (make-hash-table :test 'eql)))
         (setf (gethash con table) subtable)
         (do-hashset (use (constituent-uses con))
-          (dolist (dep (gethash use provisions))
-            (unless (or (constituent-descendant-p con dep)
-                        (constituent-descendant-p dep con))
-              (push use (gethash dep subtable)))))))
+          ;; You don't depend on something you yourself provide (this is
+          ;; important for similar declarations that sometimes appear in
+          ;; multiple files, e.g. defvars).
+          (unless (hashset-contains-p use (constituent-provisions con))
+            (dolist (dep (gethash use provisions))
+              ;; You don't depend on something provided by one of your
+              ;; descendants or ancestors.
+              (unless (or (constituent-descendant-p con dep)
+                          (constituent-descendant-p dep con))
+                (push use (gethash dep subtable))))))))
     table))
 
 (defun get-file-constituents (top)
   (let ((file-constituents nil))
-    (walk-constituents-preorder (con top)
+    (walk-constituents-postorder (con top)
       (typecase con (file-constituent (push con file-constituents))))
-    (nreverse file-constituents)))
+    file-constituents))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Graph ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -331,18 +439,96 @@
              :when dnode2 :do
           (hashset-add dnode1 (dnodes-that-depend-on dnode2))
           (hashset-add dnode2 (dnodes-needed-by dnode1))))
+    (fail-if-not-acyclic graph "during build-merged-graph")
     ;; Try to merge nodes from the same parent.
     (dolist (dnode-set (nreverse dnode-sets))
-      (do () ((hashset-empty-p dnode-set))
+      (do-until (hashset-empty-p dnode-set)
         (let* ((dnode1 (hashset-pop dnode-set)))
           (do-hashset (dnode2 dnode-set)
             (when (try-to-merge-dnodes graph dnode1 dnode2)
               (hashset-remove dnode2 dnode-set))))))
+    (fail-if-not-acyclic graph "after build-merged-graph")
     graph))
+
+(defun find-a-cycle-if-any (graph)
+  (let ((expanded (make-hashset :test 'eql))
+        (stack nil))
+    (do-hashset (dnode graph)
+      (push (list dnode) stack))
+    (do-until (null stack)
+      (let* ((chain (pop stack))
+             (head (car chain)))
+        (hashset-add head expanded)
+        (do-hashset (next (dnodes-needed-by head))
+          (when (member next chain :test 'eql)
+            (return-from find-a-cycle-if-any chain))
+          (unless (hashset-contains-p next expanded)
+            (push (cons next chain) stack)))))
+    nil))
+
+(defun fail-if-not-acyclic (graph message)
+  (let ((cycle (find-a-cycle-if-any graph)))
+    (when cycle
+      (error (format nil "There was a cycle (~A):~%~{  dnode:~%~{    ~S~%~}~}"
+                     message
+                     (loop :for dnode :in cycle :collect
+                        (loop-hashset (con (dnode-constituents dnode))
+                           :collect (constituent-summary con))))))))
+
+(defun topologically-stable-sort-graph (graph parents)
+  (fail-if-not-acyclic graph "before topologically-stable-sort-graph")
+  (let* ((sorted-list nil)
+         (finished (make-hashset :test 'eql)) ;; nodes in sorted-list
+         (enqueued (make-hashset :test 'eql)) ;; nodes ever to be in heap
+         (key-table (make-hash-table :test 'eql)) ;; maps dnodes to keys
+         (heap (make-heap :key (lambda (dnode) (gethash dnode key-table)))))
+    ;; Populate the key-table.
+    (let ((parents-table (make-hash-table :test 'eql)))
+      (loop :for parent :in parents :for index :from 1
+         :do (setf (gethash parent parents-table) index))
+      (do-hashset (dnode graph)
+        (let ((index (gethash (dnode-parent dnode) parents-table)))
+          (assert index)
+          (setf (gethash dnode key-table)
+                (- (+ (* 10000 index) ;; this is a gross hack
+                      (loop-hashset (con (dnode-constituents dnode))
+                         :minimize (constituent-index con))))))))
+    ;; Initialize heap to all nodes that no other node depends on -- such
+    ;; nodes can safely come at the _end_ of the list, and thus can be _pushed_
+    ;; onto sorted-list _first_.
+    (do-hashset (dnode graph)
+      (when (hashset-empty-p (dnodes-that-depend-on dnode))
+        (hashset-add dnode enqueued)
+        (heap-insert dnode heap)))
+    ;; Work until the heap has been emptied.
+    (do-until (heap-empty-p heap)
+      ;; Pop the next item off the heap, and push it onto sorted-list.
+      (let ((dnode (heap-pop heap)))
+        (assert (hashset-contains-p dnode enqueued))
+        (assert (not (hashset-contains-p dnode finished)))
+        (hashset-add dnode finished)
+        (push dnode sorted-list)
+        ;; Now that this node is in sorted-list, examine nodes that depend on
+        ;; this one.  Enqueue any such nodes that 1) have never been enqueued,
+        ;; and 2) are not depended on by anything that isn't already in
+        ;; sorted-list.  Each node in the graph will thus be enqueued just
+        ;; after the last node that depends on it is enqueued.
+        (do-hashset (other (dnodes-needed-by dnode))
+          (when (and (not (hashset-contains-p other enqueued))
+                     (hashset-subset-p (dnodes-that-depend-on other) finished))
+            (hashset-add other enqueued)
+            (heap-insert other heap)))))
+    ;; When we're done, every node from the graph should now be in sorted-list,
+    ;; in topological order.
+    (assert (= (length sorted-list) (hashset-count graph)))
+    (assert (or (null sorted-list)
+                (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
+    sorted-list))
 
 (defun topologically-sort-graph (graph)
   "Given an acyclic graph of nodes, return a list of the nodes in topological
    order (that is, each node comes before all nodes that depend on it)."
+  (fail-if-not-acyclic graph "before topologically-sort-graph")
   (let ((sorted-list nil)
         (finished (make-hashset :test 'eql)) ;; nodes in sorted-list
         (enqueued (make-hashset :test 'eql)) ;; nodes ever to be in stack
@@ -355,7 +541,7 @@
         (hashset-add dnode enqueued)
         (push dnode stack)))
     ;; Work until the stack has been emptied.
-    (do () ((null stack))
+    (do-until (null stack)
       ;; Pop the next item off the stack, and push it onto sorted-list.
       (let ((dnode (pop stack)))
         (assert (hashset-contains-p dnode enqueued))

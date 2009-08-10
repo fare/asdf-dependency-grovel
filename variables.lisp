@@ -1,6 +1,11 @@
 #+xcvb (module (:depends-on ("package")))
 
-(cl:in-package #:asdf-dependency-grovel)
+(in-package #:asdf-dependency-grovel)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Debugging ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defparameter *debug-trace* nil
+  "When non-nil, enables all kinds of output for debugging ADG.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -10,14 +15,37 @@
   "When the override macroexpand hook is active, this is bound to the old value
    of *macroexpand-hook*.")
 
+(defvar *preprocess-form-p* t
+  "Used to let the groveling-macroexpand-hook know when it needs to preprocess
+   a form before macroexpanding it.  It starts out as t, but is bound to nil
+   within the instrumented-eval function.")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defvar *current-constituent* nil
+  "The lowest-level constituent that we are currently inside.")
+
+(defvar *constituent-table* nil
+  "Hash table mapping constituent designators to constituent objects
+   (initialized by with-constituent-groveling).")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Global Variable Tracking ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defvar *suspected-variables* nil
+  "Hash table containing the symbols that should be treated as if they were
+   variables (as if by defvar/defparameter) when used in forms.")
+
+(defvar *suspected-constants* nil
+  "Hash table containing the symbols that should be treated as if they were
+   constants (as if by defconstant) when used in forms.")
+
+(defvar *global-mutations* nil
+  "Experimental -- likely to be removed in the future.  (msteele)")
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; ASDF Stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; (defvar *current-component* nil
 ;;   "The currently loaded/compiled ASDF component")
-
-;; (defvar *suspected-variables* nil
-;;   "Hash table containing the symbols that should be treated as if they were
-;;    variables when used in forms.")
 
 ;; (defvar *current-dependency-state* nil
 ;;   "The state of dependency information for the current groveling run.")
@@ -95,24 +123,5 @@
    an :import-from or :shadowing-import-from in a defpackage.  If nil, then
    signal-internal-symbols becomes a no-op, and the defpackage and in-package
    handlers do less work.")
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; Added by msteele:
-
-;; (defvar *non-asdf-p* nil
-;;   "When nil, assumes we're groveling ASDF-based code.
-;;    When non-nil, assumes we're groveling non-ASDF-based code.")
-
-;; (defvar *using-constituents* nil
-;;   "When nil, assumes we're using the old representations.
-;;    When non-nil, assumes we're using constituents.")
-
-(defvar *current-constituent* nil
-  "The lowest-level constituent that we are currently inside.")
-
-(defvar *constituent-table* nil
-  "Hash table mapping constituent designators to constituent objects
-   (initialized by with-constituent-groveling).")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
