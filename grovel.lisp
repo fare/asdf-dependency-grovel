@@ -31,8 +31,8 @@
        (define-symbol-macro ,name ,new-name)
        ,(macroexpand `(,operator ,new-name ,@args) env))))
 
-;; Currently used only by preprocess-form.
-(defmacro walk-symbols ((sym form) &body body)
+;; Used by check-for-transfers and preprocess-form.
+(defmacro do-walk-symbols ((sym form) &body body)
   "Visit each symbol in `form' one at a time, bind `sym' to that symbol, and
    execute the body.  Note that this will not visit non-symbols, such as
    numeric literals."
@@ -220,7 +220,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Form Preprocessing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; Used only by check-for-transfers.
+;; Used only by replace-transfers.
 (defun transfer-constituent (con)
   "Add all provisions and uses in the given constituent to the current
    constituent."
@@ -235,7 +235,8 @@
   (wtf "End transfer ~S ->~%          ~S" (constituent-summary con)
          (constituent-summary *current-constituent*)))
 
-(defun check-for-transfers (form)
+;; Used only by check-for-transfers.
+(defun replace-transfers (form)
   "Return a form similar to the one given, but replace
    with-transfer-constituent subforms with their included results, while
    transferring the included constituents."
@@ -244,7 +245,7 @@
              ;; If the form is ('with-transfer-constituent con result), then
              ;; transfer the constituent and replace the form with the result.
              (progn (transfer-constituent (second form))
-                    (check-for-transfers (third form)))
+                    (replace-transfers (third form)))
              ;; Otherwise, recurse on each member of the form.  There are a
              ;; couple special cases we have to watch out for, which are
              ;; commented below.
@@ -258,31 +259,39 @@
                   ;; whether (third cdr) is a cons or not.
                   :if (eql (first cdr) 'with-transfer-constituent)
                     :do (transfer-constituent (second cdr)) :and
-                    :append (cons (check-for-transfers car)
+                    :append (cons (replace-transfers car)
                                   (third cdr)) :into newform :and
                     :do (return newform)
                   :else
-                    :collect (check-for-transfers car) :into newform
+                    :collect (replace-transfers car) :into newform
                   :end
                 ;; If cdr is not a cons cell, then we're at the end of the
                 ;; list.  If cdr is nil, then the :append below is equivalent
-                ;; to just saying :collect (check-for-transfers car), but if
+                ;; to just saying :collect (replace-transfers car), but if
                 ;; cdr is not nil (i.e. this is a dotted list), then it's
                 ;; important that we use the :append way.
                 :else
-                  :append (cons (check-for-transfers car) cdr) :into newform
+                  :append (cons (replace-transfers car) cdr) :into newform
                 :finally (return newform))))
         ((vectorp form)
          ;; Note that there are many slightly different sorts of vectors; using
          ;; (type-of form) instead of just 'vector helps us use the right one.
-         (map (type-of form) #'check-for-transfers form))
+         (map (type-of form) #'replace-transfers form))
         (t form)))
+
+(defun check-for-transfers (form)
+  ;; If there are no transfers, then we must return the actual original form.
+  ;; Otherwise, subtle things can break.
+  (do-walk-symbols (symbol form)
+    (when (eql symbol 'with-transfer-constituent)
+      (return-from check-for-transfers (replace-transfers form))))
+  form)
 
 (defun preprocess-form (form)
   "Walk the form, signaling any suspected variables or constants, and uses of
    symbols from defpackages."
   (let ((newform (check-for-transfers form)))
-    (walk-symbols (sym newform)
+    (do-walk-symbols (sym newform)
       ;; If the symbol is in a package other than CL or KEYWORD, we should
       ;; signal that we're using that package.
       (let ((package (symbol-package sym)))
