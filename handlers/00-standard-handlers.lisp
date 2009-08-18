@@ -85,6 +85,7 @@
 (define-macroexpand-handlers (form)
     (defvar defparameter)
   (destructuring-bind (def name &rest rest) form
+    (declare (ignore def rest))
     (hashset-add name *suspected-variables*)
     (signal-provider name 'defvar)
 ;;     (let ((new-name (special-substitute-name name)))
@@ -106,9 +107,10 @@
 
 (define-macroexpand-handlers (form :environment env)
     (defconstant)
+  (declare (ignore env))
   (let ((symbol (second form)))
-    (signal-provider (second form) 'defconstant)
-    (hashset-add (second form) *suspected-constants*)
+    (signal-provider symbol 'defconstant)
+    (hashset-add symbol *suspected-constants*)
 ;;         (does-macroexpand-with-epilogue
 ;;             ((macro-function 'symbol-macroify) env)
 ;;           `(symbol-macroify ,@form)
@@ -181,7 +183,7 @@
 
 (define-macroexpand-handlers (form :function fun :environment env)
     (defmethod)
-  (signal-user  (second form) 'defgeneric)
+  (signal-user (second form) 'defgeneric)
   ;; walk arg list and signal use of specialized-on classes, and
   ;; instrument function body.
   (let* ((name (second form))
@@ -429,6 +431,7 @@
 
 (define-macroexpand-handlers (form :function fun :environment env)
     (pushnew push)
+  (declare (ignore fun env))
   (let ((setee (third form)))
     (when (hashset-contains-p setee *suspected-variables*)
       (push (list (first form)

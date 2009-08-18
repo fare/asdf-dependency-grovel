@@ -12,7 +12,7 @@
     (apply #'format t (format nil "~&DEBUG: ~A~%" string) args)))
 
 ;; Used in a number of places, but not exported.
-(eval-when (:compile-toplevel :load-toplevel)
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (defun canonical-package-name (package-designator)
     "Return the name of a package as a symbol, given either a package object or
      a string or symbol naming the package.  Note that given a package nickname
