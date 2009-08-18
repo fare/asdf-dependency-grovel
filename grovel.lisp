@@ -101,6 +101,29 @@
       (constituent-add-use use *current-constituent*)))
   (values))
 
+;; Used in a number of handlers.
+(defun signal-typespec (typespec)
+  "Traverse a type specification and signal-user as appropriate."
+  (cond
+    ((consp typespec)
+     (case (first typespec)
+       (quote ;; typespecs often come quoted
+        (signal-typespec (second typespec)))
+       ((and or not)
+        (mapcar #'signal-typespec (rest typespec)))
+       (satisfies
+        (signal-user (second typespec) 'defun))
+       ((vector array)
+        (signal-typespec (second typespec)))
+       (function
+        (and (second typespec)
+             (signal-typespec (second typespec))
+             (and (third typespec)
+                  (signal-typespec (third typespec)))))
+       (:otherwise nil)))
+    ((not (null typespec))
+     (signal-user typespec 'deftype))))
+
 ;; This function is part of the machinery for noticing dependencies due to
 ;; importing symbols.  For details, refer to the "Internal Symbol Checking"
 ;; section of variables.lisp.
@@ -866,7 +889,39 @@
       (format stream "GLOBAL MUTATIONS~%")
       (dolist (mutation *global-mutations*)
         (format stream "~S~%" mutation)))))
-
+#|
+(defun print-constituent-file-splitting-strategy (&key (stream t))
+  (multiple-value-bind (graph topsorted)
+      (build-better-merged-graph *current-constituent*)
+    (let ((parent-map (make-hash-table :test 'eql))
+          (designator-map (make-hash-table :test 'eql))
+          (*print-pretty* nil)) ;; Don't insert newlines when formatting sexps!
+      (do-hashset (dnode graph)
+        (push dnode (gethash (dnode-parent dnode) parent-map)))
+      (format stream "~&FILE SPLITTING STRATEGY~%")
+      (loop :for parent :being :each :hash-key :of parent-map
+            :using (:hash-value dnodes)
+            :when (> (length dnodes) 1) :do
+         (format stream "~S~%" (constituent-summary parent))
+         (dolist (dnode dnodes)
+           (format stream "  dnode:~%")
+           (do-hashset (con (dnode-constituents dnode))
+             (format stream "    ~S~%" (constituent-summary con)))))
+      (do-hashset (dnode graph)
+        (setf (gethash dnode designator-map)
+              (cons (loop-hashset (con (dnode-constituents dnode))
+                       :minimize (constituent-index con))
+                    (constituent-designator (dnode-parent dnode)))))
+      (format stream "TOPOLOGICAL SORT~%")
+      (dolist (dnode topsorted)
+        (format stream "~S~%" (gethash dnode designator-map)))
+      (format stream "GRAPH DEPENDENCIES~%")
+      (do-hashset (dnode graph)
+        (format stream "c~S~%" (gethash dnode designator-map))
+        (do-hashset (other (dnodes-needed-by dnode))
+          (format stream "    d~S~%" (gethash other designator-map))))
+      (format stream "ALL DONE!~%"))))
+|#
 (defun print-constituent-file-splitting-strategy (&key (stream t))
   (let ((graph (build-merged-graph *current-constituent*))
         (parent-map (make-hash-table :test 'eql))
@@ -889,13 +944,13 @@
                      :minimize (constituent-index con))
                   (constituent-designator (dnode-parent dnode)))))
     (let ((file-constituents (get-file-constituents *current-constituent*)))
-      (format stream "ORIGINAL FILE ORDER~%")
-      (dolist (con file-constituents)
-        (format stream "~S~%" (constituent-summary con)))
       (format stream "TOPOLOGICAL SORT~%")
       (dolist (dnode (topologically-stable-sort-graph
                       graph file-constituents))
-        (format stream "~S~%" (gethash dnode designator-map))))
+        (format stream "~S~%" (gethash dnode designator-map)))
+      (format stream "ORIGINAL FILE ORDER~%")
+      (dolist (con file-constituents)
+        (format stream "~S~%" (constituent-summary con))))
     (format stream "GRAPH DEPENDENCIES~%")
     (do-hashset (dnode graph)
       (format stream "c~S~%" (gethash dnode designator-map))
