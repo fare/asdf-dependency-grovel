@@ -57,8 +57,20 @@ to the base of the system."
                   ((op ,op-type)
                    (comp instrumented-cl-source-file))
                 (with-dependency-tracking comp (call-next-method)))))
+  (emit-perform-method asdf:load-source-op)
   (emit-perform-method asdf:load-op)
   (emit-perform-method asdf:compile-op))
+
+(defmethod asdf:perform
+    ((op asdf:load-source-op)
+     (comp instrumented-cl-source-file))
+  (wtf "Perform asdf:load-source-op ~S" comp) 
+  (let ((source (asdf:component-pathname comp)))
+    (setf (asdf:component-property comp 'last-loaded-as-source)
+          (and (fine-grain-instrumented-load ;;load
+		source)
+               (get-universal-time)))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

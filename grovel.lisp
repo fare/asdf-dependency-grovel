@@ -60,15 +60,23 @@
                                 *macroexpand-hook*)))
     (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
 
-;; Exists only to be exported; used by XCVB.
+;; Exists only to be exported; used by XCVB when converting to ASDF.
+;; XCVB may take the traverse order of components from ASDF file and
+;; pass the order to components-in-traverse-order so that the function
+;; doesn't need to recompute the order.
 (defun components-in-traverse-order (system compspecs
+				     traverse-order-components
                                      &optional (traverse-type 'asdf:load-op))
-  (let* ((op (make-instance traverse-type))
-         (opspecs (asdf::traverse op system))
-         (order-table (make-hash-table)))
-    (loop :for (nil . component) :in opspecs
-          :for component-index :from 0
-          :do (setf (gethash component order-table) component-index))
+  (let ((order-table (make-hash-table)))
+    (if (not traverse-order-components)
+      (let* ((op (make-instance traverse-type))
+	     (opspecs (asdf::traverse op system)))
+	(loop :for (nil . component) :in opspecs
+  	      :for component-index :from 0
+	      :do (setf (gethash component order-table) component-index)))
+      (loop :for component :in traverse-order-components
+            :for component-index :from 0
+	    :do (setf (gethash component order-table) component-index)))
     (sort compspecs #'<
           :key (lambda (c) (gethash (first c) order-table -1)))))
 
@@ -502,8 +510,10 @@
 ;; Used by maybe-translated-component-name and output-component-file.
 (defun enough-component-spec (c &optional pn-p)
   (flet ((strip/ (name)
-           (subseq name (1+ (or (position #\/ name :from-end t) -1)))))
-
+           (subseq name (1+ (or (position #\/ name :from-end t) -1))))
+	 (strip.lisp (name)
+	   (if (and (< 5 (length name)) (equal ".lisp" (subseq name (- (length name) 5))))
+	       (subseq name 0 (- (length name) 5)))))
     (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
                (make-pathname :name (asdf:component-name c) :type "lisp"))
         (format nil "~S" (asdf:component-name c))
@@ -511,8 +521,10 @@
           ;; XXX: make-pathname forms are more portable, but namestrings
           ;; are more readable.
           (format nil "~S~:[~; :pathname #p~S~]"
-                  (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
-                                                    :type nil :defaults (asdf:component-pathname c)))
+		  (strip.lisp
+		   (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
+						     :type "lisp"
+						     :defaults (asdf:component-pathname c))))
                   pn-p
                   (enough-namestring pn))))))
 
@@ -828,7 +840,13 @@
     (with-constituent-groveling
       (dolist (system systems)
         (operating-on-asdf-component-constituent (system)
-          (asdf:oos 'asdf:load-op system :verbose verbose)))
+          (asdf:operate 'asdf:load-source-op system :verbose verbose)))
+      (with-open-file
+	  (dependency-report-stream "/tmp/depreport.sexp"
+				    :direction :output
+				    :if-exists :supersede
+				    :if-does-not-exist :create)
+	(print-constituent-dependency-report :stream dependency-report-stream))
       (let ((deps (constituent-dependency-forms *current-constituent*
                                                 interesting-systems)))
         (output-component-file stream deps))
