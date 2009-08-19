@@ -263,17 +263,15 @@
             ;; (if any) from `body'.
             (slot-descriptions (if (and (consp body) (stringp (car body)))
                                    (cdr body) body)))
-        (loop :for slot-desc :in slot-descriptions
+        (loop :for (slot-name slot-init-value . slot-options)
+              :in (loop :for desc :in slot-descriptions :collect
+                     (if (listp desc) desc (list desc)))
               ;; Get the symbol for this slot's accessor.
-              :as accessor-name =
-                (destructuring-bind (slot-name &optional slot-init-value
-                                          &rest slot-options)
-                    (if (listp slot-desc) slot-desc (list slot-desc))
-                  (declare (ignore slot-init-value slot-options))
-                  (let* ((slot-name-str (symbol-name slot-name))
-                         (accessor-name-str
-                          (concatenate 'string prefix slot-name-str)))
-                    (intern accessor-name-str)))
+              :as accessor-name :=
+                      (let* ((slot-name-str (symbol-name slot-name))
+                             (accessor-name-str
+                              (concatenate 'string prefix slot-name-str)))
+                        (intern accessor-name-str))
               ;; Provide this accessor.
               :do (signal-provider accessor-name 'defun)
               ;; Generate instrumentation for the accessor.
@@ -289,6 +287,10 @@
                                     (signal-user ',accessor-name 'defun)
                                     (apply ,temp args)))))
                 :into redefinitions
+              ;; Check for a type option on the slot.
+              :do (let ((typespec (getf slot-options :type)))
+                    (when typespec
+                      (signal-typespec typespec)))
               ;; Finally, put all the instrumentation into place.
               :finally (return (does-macroexpand-with-epilogue (fun env)
                                  form
@@ -298,48 +300,34 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Type-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(labels ((traverse-subtypes (typespec)
-           (cond
-             ((consp typespec)
-              (case (first typespec)
-                (quote            ; typespecs often come quoted. argh.
-                 (traverse-subtypes (second typespec)))
-                ((and or not) (mapcar #'traverse-subtypes (rest typespec)))
-                (satisfies (signal-user (second typespec) 'defun))
-                ((vector array) (traverse-subtypes (second typespec)))
-                (function (and (second typespec)
-                               (traverse-subtypes (second typespec))
-                               (and (third typespec)
-                                    (traverse-subtypes (third typespec)))))
-                (:otherwise nil)))
-             ((not (null typespec))
-              (signal-user typespec 'deftype)))))
+(define-macroexpand-handlers (form)
+    (handler-bind handler-case)
+  (loop :for (condition . nil) :in (if (eql 'handler-bind (first form))
+                                       (second form)
+                                       (cddr form))
+     :unless (eql condition :no-error)
+     :do (signal-typespec condition))
+  (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form)
-      (handler-bind handler-case)
-    (loop :for (condition . nil) :in (if (eql 'handler-bind (first form))
-                                           (second form)
-                                           (cddr form))
-          :unless (eql condition :no-error)
-            :do (traverse-subtypes condition))
-    (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form)
-      (deftype)
-    (signal-provider (second form) 'deftype)
-    (traverse-subtypes (fourth form))
-    (does-not-macroexpand))
+(define-macroexpand-handlers (form)
+    (deftype)
+  (signal-provider (second form) 'deftype)
+  (signal-typespec (fourth form))
+  (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form)
-      (typecase etypecase)
-    (loop :for (typespec . nil) :in (cddr form)
-          :do (traverse-subtypes typespec))
-    (does-not-macroexpand))
 
-  (define-macroexpand-handlers (form)
-      (check-type)
-    (traverse-subtypes (third form))
-    (does-not-macroexpand)))
+(define-macroexpand-handlers (form)
+    (typecase etypecase)
+  (loop :for (typespec . nil) :in (cddr form)
+     :do (signal-typespec typespec))
+  (does-not-macroexpand))
+
+
+(define-macroexpand-handlers (form)
+    (check-type)
+  (signal-typespec (third form))
+  (does-not-macroexpand))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Package-Related Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -374,8 +362,8 @@
                                (clause-contents :shadowing-import-from
                                                 #'clause-second-element))
           :do (signal-user (canonical-package-name use) 'defpackage))
-    ;; signal imports of symbols (they need to exist before they can
-    ;; be imported)
+    ;; Signal imports of symbols (they need to exist before they can
+    ;; be imported).
     (when *check-internal-symbols-p*
       (loop :for (nil pkg . symbols)
             :in (remove-if-not (lambda (clause)
@@ -405,6 +393,17 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Miscellaneous Handlers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-macroexpand-handlers (form)
+    (loop)
+  ;; Note that at the moment, this handler doesn't actually parse the loop
+  ;; macro, and could break if someone, say, used of-type as a name of a loop
+  ;; variable.  Hopefully, that won't happen?
+  (loop :for (car . cdr) :on form
+     :when (and (symbolp car) (equal (string car) "OF-TYPE"))
+       :do (signal-typespec (car cdr)))
+  (does-not-macroexpand))
 
 
 (define-macroexpand-handlers (form)

@@ -449,7 +449,46 @@
               (hashset-remove dnode2 dnode-set))))))
     (fail-if-not-acyclic graph "after build-merged-graph")
     graph))
-
+#|
+(defun build-better-merged-graph (top-constituent)
+  (let ((graph (make-hashset :test 'eql))
+        (dnode-lookup (make-hash-table :test 'eql))
+        (dependencies (constituent-dependency-table top-constituent))
+        (file-constituents (get-file-constituents top-constituent)))
+    ;; Populate the graph with nodes.
+    (dolist (file-con file-constituents)
+      (dolist (child (constituent-children file-con))
+        (let ((dnode (make-dnode child)))
+          (setf (gethash child dnode-lookup) dnode)
+          (hashset-add dnode graph))))
+    ;; Populate the nodes with dependencies.
+    (loop :for con1 :being :each :hash-key :in dnode-lookup
+          :using (:hash-value dnode1) :do
+       (loop :for con2 :being :each :hash-key :in (gethash con1 dependencies)
+             :for dnode2 := (gethash con2 dnode-lookup)
+             :when dnode2 :do
+          (hashset-add dnode1 (dnodes-that-depend-on dnode2))
+          (hashset-add dnode2 (dnodes-needed-by dnode1))))
+    (fail-if-not-acyclic graph "during build-better-merged-graph")
+    ;; Try to merge nodes from the same parent.
+    (let ((topsorted
+           (loop :with current-dnode := nil
+                 :for (dnode . rest) :on (topologically-stable-sort-graph
+                                          graph file-constituents)
+              :if (and current-dnode (eql (dnode-parent current-dnode)
+                                          (dnode-parent dnode)))
+                :do (unless (try-to-merge-dnodes graph current-dnode dnode)
+                      (error "that really should have worked!"))
+              :else
+                :when current-dnode
+                  :collect current-dnode
+                :end :and
+                :do (setf current-dnode dnode)
+              :when (null rest)
+                :collect current-dnode)))
+      (fail-if-not-acyclic graph "after build-better-merged-graph")
+      (values graph topsorted))))
+|#
 (defun find-a-cycle-if-any (graph)
   (let ((expanded (make-hashset :test 'eql))
         (stack nil))
@@ -524,7 +563,7 @@
     (assert (or (null sorted-list)
                 (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
     sorted-list))
-
+#|
 (defun topologically-sort-graph (graph)
   "Given an acyclic graph of nodes, return a list of the nodes in topological
    order (that is, each node comes before all nodes that depend on it)."
@@ -564,5 +603,5 @@
     (assert (or (null sorted-list)
                 (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
     sorted-list))
-
+|#
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
