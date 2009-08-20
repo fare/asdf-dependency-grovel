@@ -1,4 +1,4 @@
-
+n
 #+xcvb (module (:depends-on ("variables" "classes" "asdf-classes")))
 
 (cl:in-package #:asdf-dependency-grovel)
@@ -539,15 +539,18 @@
 	       (subseq name 0 (- (length name) 5)))))
     (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
                (make-pathname :name (asdf:component-name c) :type "lisp"))
-        (format nil "~S" (asdf:component-name c))
-        (let ((pn (parse-namestring (enough-namestring (asdf:component-pathname c)))))
+        (format nil "~S" (normalized-component-name c))
+        (let ((pn (parse-namestring (enough-namestring (normalize-pathname-directory
+							(asdf:component-pathname c))))))
           ;; XXX: make-pathname forms are more portable, but namestrings
           ;; are more readable.
           (format nil "~S~:[~; :pathname #p~S~]"
 		  (strip.lisp
-		   (enough-namestring (make-pathname :name (strip/ (asdf:component-name c))
-						     :type "lisp"
-						     :defaults (asdf:component-pathname c))))
+		   (enough-namestring
+		    (normalize-pathname-directory
+		     (make-pathname :name (strip/ (asdf:component-name c))
+				    :type "lisp"
+				    :defaults (asdf:component-pathname c)))))
                   pn-p
                   (enough-namestring pn))))))
 
@@ -624,6 +627,34 @@
     ;; other types get their class name.
     (t
      (class-name (class-of component)))))
+
+(defun normalize-pathname-directory-component (pathname-directory)
+  (if (null pathname-directory)
+      nil
+      (loop :with pathname-directory-r = (reverse pathname-directory)
+	    :with ups = nil
+	    :with new-pathname-directory = nil
+	    :for elt :in pathname-directory-r
+	 :do
+	 (cond ((eq elt :relative)
+		(return (cons elt (append ups new-pathname-directory))))
+	       ((eq elt :absolute)
+		(return (cons elt new-pathname-directory)))
+	       ((eq elt :up)
+		(push elt ups))
+	       ((eq elt "."))
+	       ((null ups)
+		(push elt new-pathname-directory))
+	       (t
+		(pop ups))))))
+
+(defun normalize-pathname-directory (pathname)
+  (make-pathname :directory
+		 (normalize-pathname-directory-component (pathname-directory pathname))
+		 :defaults pathname))
+
+(defun normalized-component-name (component)
+  (pathname-name (make-pathname :defaults (asdf:component-name component))))
 
 ;; Currently used only by initially-grovel-dependencies.
 (defun output-component-file (stream dependencies &key
