@@ -4,7 +4,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Debugging ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defparameter *debug-trace* t ;;nil
+(defparameter *debug-trace* nil
   "When non-nil, enables all kinds of output for debugging ADG.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

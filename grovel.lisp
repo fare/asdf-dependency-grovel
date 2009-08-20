@@ -1,4 +1,3 @@
-n
 #+xcvb (module (:depends-on ("variables" "classes" "asdf-classes")))
 
 (cl:in-package #:asdf-dependency-grovel)
@@ -60,25 +59,6 @@ n
                                 *macroexpand-hook*)))
     (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
 
-;; Exists only to be exported; used by XCVB when converting to ASDF.
-;; XCVB may take the traverse order of components from ASDF file and
-;; pass the order to components-in-traverse-order so that the function
-;; doesn't need to recompute the order.
-(defun components-in-traverse-order (system compspecs
-				     traverse-order-components
-                                     &optional (traverse-type 'asdf:load-op))
-  (let ((order-table (make-hash-table)))
-    (if (not traverse-order-components)
-      (let* ((op (make-instance traverse-type))
-	     (opspecs (asdf::traverse op system)))
-	(loop :for (nil . component) :in opspecs
-  	      :for component-index :from 0
-	      :do (setf (gethash component order-table) component-index)))
-      (loop :for component :in traverse-order-components
-            :for component-index :from 0
-	    :do (setf (gethash component order-table) component-index)))
-    (sort compspecs #'<
-          :key (lambda (c) (gethash (first c) order-table -1)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signaling Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -629,19 +609,17 @@ n
      (class-name (class-of component)))))
 
 (defun normalize-pathname-directory-component (pathname-directory)
-  (if (null pathname-directory)
-      nil
-      (loop :with pathname-directory-r = (reverse pathname-directory)
-	    :with ups = nil
-	    :with new-pathname-directory = nil
-	    :for elt :in pathname-directory-r
-	 :do
+  (and pathname-directory
+       (loop
+         :with ups = nil
+         :with new-pathname-directory = nil
+         :for elt :in (reverse pathname-directory) :do
 	 (cond ((eq elt :relative)
 		(return (cons elt (append ups new-pathname-directory))))
 	       ((eq elt :absolute)
 		(return (cons elt new-pathname-directory)))
-	       ((eq elt :up)
-		(push elt ups))
+	       ((member elt '(:back :up "..") :test 'equal)
+		(push :back ups))
 	       ((eq elt "."))
 	       ((null ups)
 		(push elt new-pathname-directory))

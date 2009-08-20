@@ -6,3 +6,7 @@
 ** need a way to re-provide something: have an explicit component order. This
    happened implicitly before, but we now need to track the /reason/
    why things depend on each other.
+
+
+* rewrite ADG to use a fully instrumented code-walker + CL-in-CL implementation
+  so we don't have to approximate dependencies when we can trace them directly.
