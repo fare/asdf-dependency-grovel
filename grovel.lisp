@@ -511,28 +511,29 @@
 ;; Everything below is needed only by output-component-file.
 
 ;; Used by maybe-translated-component-name and output-component-file.
+(defun strip/ (name)
+  (subseq name (1+ (or (position #\/ name :from-end t) -1))))
+(defun strip.lisp (name)
+  (if (and (< 5 (length name)) (equal ".lisp" (subseq name (- (length name) 5))))
+    (subseq name 0 (- (length name) 5))))
+
 (defun enough-component-spec (c &optional pn-p)
-  (flet ((strip/ (name)
-           (subseq name (1+ (or (position #\/ name :from-end t) -1))))
-	 (strip.lisp (name)
-	   (if (and (< 5 (length name)) (equal ".lisp" (subseq name (- (length name) 5))))
-	       (subseq name 0 (- (length name) 5)))))
-    (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
-               (make-pathname :name (asdf:component-name c) :type "lisp"))
-        (format nil "~S" (normalized-component-name c))
-        (let ((pn (parse-namestring (enough-namestring (normalize-pathname-directory
-							(asdf:component-pathname c))))))
-          ;; XXX: make-pathname forms are more portable, but namestrings
-          ;; are more readable.
-          (format nil "~S~:[~; :pathname #p~S~]"
-		  (strip.lisp
-		   (enough-namestring
-		    (normalize-pathname-directory
-		     (make-pathname :name (strip/ (asdf:component-name c))
-				    :type "lisp"
-				    :defaults (asdf:component-pathname c)))))
-                  pn-p
-                  (enough-namestring pn))))))
+  (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
+             (make-pathname :name (asdf:component-name c) :type "lisp"))
+    (format nil "~S" (normalized-component-name c))
+    (let ((pn (parse-namestring (enough-namestring (normalize-pathname-directory
+                                                    (asdf:component-pathname c))))))
+      ;; XXX: make-pathname forms are more portable, but namestrings
+      ;; are more readable.
+      (format nil "~S~:[~; :pathname #p~S~]"
+              (strip.lisp
+               (enough-namestring
+                (normalize-pathname-directory
+                 (make-pathname :name (strip/ (asdf:component-name c))
+                                :type "lisp"
+                                :defaults (asdf:component-pathname c)))))
+              pn-p
+              (enough-namestring pn)))))
 
 ;; Used by additional-dependencies* and overridden-dependencies*.
 (defun map-over-instrumented-component-and-parents (component slot-name)
@@ -856,6 +857,35 @@
                      ,(loop :for comp :in (asdf-system-file-components system)
                             :for deps = (gethash comp component-deps)
                             :collect `(,comp :depends-on ,deps))))))
+
+#| Last "working" version by msteele: won't work at the file level
+   if the analysis was at the form level!
+;; Used only by initially-grovel-dependencies.
+(defun constituent-dependency-forms (top interesting-systems)
+  (let ((constituent-deps (constituent-dependency-table top))
+        (component-deps (make-hash-table :test 'eql))
+        (system-deps (make-hash-table :test 'eql)))
+    ;; Populate the component-deps and system-deps tables.
+    (loop :for con1 :being :each :hash-key :of constituent-deps
+          :using (:hash-value deps)
+          :when (typep con1 'asdf-component-constituent) :do
+       (let ((comp1 (asdf-component-constituent-component con1)))
+         (loop :for con2 :being :each :hash-key :of deps
+               :when (typep con2 'asdf-component-constituent) :do
+            (let ((comp2 (asdf-component-constituent-component con2)))
+              (pushnew comp2 (gethash comp1 component-deps) :test 'eql)
+              (pushnew (asdf:component-system comp2)
+                       (gethash (asdf:component-system comp1) system-deps)
+                       :test 'eql)))))
+    ;; Build and return the dependency forms.
+    (loop :for system :in interesting-systems
+          :collect `(,system
+                     :depends-on ,(gethash system system-deps)
+                     :components
+                     ,(loop :for comp :in (asdf-system-file-components system)
+                            :for deps = (gethash comp component-deps)
+                            :collect `(,comp :depends-on ,deps))))))
+|#
 
 ;; Used once in asdf-ops, but nowhere else.
 (defun initially-grovel-dependencies (systems
