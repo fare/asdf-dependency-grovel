@@ -832,6 +832,16 @@
 ;;                                              state comp))
 ;;                             :collect `(,comp :depends-on ,deps))))))
 
+(defgeneric enclosing-file-constituent (constituent)
+  (:method (x)
+    nil)
+  (:method ((x asdf-component-constituent))
+    (when (typep (asdf-component-constituent-component x) 'instrumented-cl-source-file)
+      x))
+  (:method ((x file-constituent))
+    x)
+  (:method ((x form-constituent))
+    (enclosing-file-constituent (constituent-parent x))))
 
 ;; Used only by initially-grovel-dependencies.
 (defun constituent-dependency-forms (top interesting-systems)
@@ -842,13 +852,16 @@
         (component-deps (make-hash-table :test 'eql))
         (system-deps (make-hash-table :test 'eql)))
     ;; Populate the component-deps and system-deps tables.
-    (loop :for con1 :being :each :hash-key :of constituent-deps
-          :using (:hash-value deps)
-          :when (typep con1 'asdf-component-constituent) :do
-       (let ((comp1 (asdf-component-constituent-component con1)))
-         (loop :for con2 :being :each :hash-key :of deps
-               :when (typep con2 'asdf-component-constituent) :do
-            (let ((comp2 (asdf-component-constituent-component con2)))
+    (loop
+      :for con1 :being :each :hash-key :of constituent-deps :using (:hash-value deps)
+      :for filecon1 = (enclosing-file-constituent con1)
+      :when (typep filecon1 'asdf-component-constituent) :do
+      (let ((comp1 (asdf-component-constituent-component filecon1)))
+         (loop
+           :for con2 :being :each :hash-key :of deps
+           :for filecon2 = (enclosing-file-constituent con2)
+           :when (typep filecon2 'asdf-component-constituent) :do
+           (let ((comp2 (asdf-component-constituent-component con2)))
               (pushnew comp2 (gethash comp1 component-deps) :test 'eql)
               (pushnew (asdf:component-system comp2)
                        (gethash (asdf:component-system comp1) system-deps)
