@@ -64,12 +64,22 @@ to the base of the system."
 (defmethod asdf:perform
     ((op asdf:load-source-op)
      (comp instrumented-cl-source-file))
-  (wtf "Perform asdf:load-source-op ~S" comp) 
+  (wtf "Perform asdf:load-source-op ~S" comp)
   (let ((source (asdf:component-pathname comp)))
     (setf (asdf:component-property comp 'last-loaded-as-source)
           (and (fine-grain-instrumented-load ;;load
 		source)
                (get-universal-time)))))
+
+(defmethod asdf:perform :around
+    ((op asdf:compile-op)
+     (comp instrumented-cl-source-file))
+  nil)
+
+(defmethod asdf:perform :around
+    ((op asdf:load-op)
+     (comp instrumented-cl-source-file))
+  (asdf:perform (make-instance 'asdf:load-source-op) comp))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

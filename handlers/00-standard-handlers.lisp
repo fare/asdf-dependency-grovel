@@ -257,8 +257,9 @@
       (let (;; Determine the prefix used to create accessor function names.
             (prefix (let ((conc-name-option (assoc :conc-name struct-options)))
                       (if conc-name-option
-                          (string (second conc-name-option))
-                          (concatenate 'string (symbol-name name) "-"))))
+                        (let ((c (second conc-name-option)))
+                          (if c (string c) ""))
+                        (concatenate 'string (symbol-name name) "-"))))
             ;; Get the list of slot descriptions by chopping off the docstring
             ;; (if any) from `body'.
             (slot-descriptions (if (and (consp body) (stringp (car body)))

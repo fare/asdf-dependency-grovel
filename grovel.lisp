@@ -872,7 +872,7 @@
     (with-constituent-groveling
       (dolist (system systems)
         (operating-on-asdf-component-constituent (system)
-          (asdf:operate 'asdf:load-source-op system :verbose verbose)))
+          (asdf:operate 'asdf:load-op system :verbose verbose)))
       (with-open-file
 	  (dependency-report-stream "/tmp/depreport.sexp"
 				    :direction :output
