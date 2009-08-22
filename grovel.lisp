@@ -832,8 +832,12 @@
 ;;                                              state comp))
 ;;                             :collect `(,comp :depends-on ,deps))))))
 
+
 ;; Used only by initially-grovel-dependencies.
 (defun constituent-dependency-forms (top interesting-systems)
+;;;; TODO: (Fare) I think we want 1- one pass that identifies each component that is a file,
+;;;; and marks for each constituent the correct enclosing file. 2- another pass that
+;;;; recurses through all constituents and pushes the dependencies. 3- the same final pass?
   (let ((constituent-deps (constituent-dependency-table top))
         (component-deps (make-hash-table :test 'eql))
         (system-deps (make-hash-table :test 'eql)))
