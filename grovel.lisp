@@ -859,10 +859,9 @@
            :for filecon2 = (enclosing-file-constituent con2)
            :when (typep filecon2 'asdf-component-constituent) :do
            (let ((comp2 (asdf-component-constituent-component con2)))
-              (pushnew comp2 (gethash comp1 component-deps) :test 'eql)
+              (pushnew comp2 (gethash comp1 component-deps))
               (pushnew (asdf:component-system comp2)
-                       (gethash (asdf:component-system comp1) system-deps)
-                       :test 'eql)))))
+                       (gethash (asdf:component-system comp1) system-deps))))))
     ;; Build and return the dependency forms.
     (loop :for system :in interesting-systems
           :collect `(,system
@@ -871,35 +870,6 @@
                      ,(loop :for comp :in (asdf-system-file-components system)
                             :for deps = (gethash comp component-deps)
                             :collect `(,comp :depends-on ,deps))))))
-
-#| Last "working" version by msteele: won't work at the file level
-   if the analysis was at the form level!
-;; Used only by initially-grovel-dependencies.
-(defun constituent-dependency-forms (top interesting-systems)
-  (let ((constituent-deps (constituent-dependency-table top))
-        (component-deps (make-hash-table :test 'eql))
-        (system-deps (make-hash-table :test 'eql)))
-    ;; Populate the component-deps and system-deps tables.
-    (loop :for con1 :being :each :hash-key :of constituent-deps
-          :using (:hash-value deps)
-          :when (typep con1 'asdf-component-constituent) :do
-       (let ((comp1 (asdf-component-constituent-component con1)))
-         (loop :for con2 :being :each :hash-key :of deps
-               :when (typep con2 'asdf-component-constituent) :do
-            (let ((comp2 (asdf-component-constituent-component con2)))
-              (pushnew comp2 (gethash comp1 component-deps) :test 'eql)
-              (pushnew (asdf:component-system comp2)
-                       (gethash (asdf:component-system comp1) system-deps)
-                       :test 'eql)))))
-    ;; Build and return the dependency forms.
-    (loop :for system :in interesting-systems
-          :collect `(,system
-                     :depends-on ,(gethash system system-deps)
-                     :components
-                     ,(loop :for comp :in (asdf-system-file-components system)
-                            :for deps = (gethash comp component-deps)
-                            :collect `(,comp :depends-on ,deps))))))
-|#
 
 ;; Used once in asdf-ops, but nowhere else.
 (defun initially-grovel-dependencies (systems
