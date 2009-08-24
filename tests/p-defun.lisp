@@ -2,4 +2,4 @@
 
 (defun test-defun.1 (x) (declare (ignore x)))
 
-(defun test-defun.2 (x) (declare (ignore x)) "foo" (declare (special x)))
+(defun test-defun.2 (*x*) (declare (special *x*)) *x*)

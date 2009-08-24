@@ -214,20 +214,25 @@
   (:documentation "Return the unique designator of the constituent."))
 
 (defmethod constituent-designator ((con constituent))
-  (cons (constituent-index con)
-        (constituent-designator (constituent-parent con))))
+  (list* (class-of con) (constituent-index con)
+         (constituent-designator (constituent-parent con))))
+
+(defmethod constituent-designator ((con form-constituent))
+  (list* :form (constituent-index con)
+         (constituent-designator (constituent-parent con))))
 
 (defmethod constituent-designator ((con top-constituent))
   nil)
 
 (defmethod constituent-designator ((con asdf-component-constituent))
-  (cons (asdf:component-pathname (asdf-component-constituent-component con))
-        (constituent-designator (constituent-parent con))))
+  (list* :asdf
+         (asdf:component-pathname (asdf-component-constituent-component con))
+         (constituent-designator (constituent-parent con))))
 
 (defmethod constituent-designator ((con file-constituent))
-  (cons (file-constituent-path con)
-        (constituent-designator (constituent-parent con))))
-
+  (list* :file
+         (file-constituent-path con)
+         (constituent-designator (constituent-parent con))))
 
 (defgeneric constituent-summary (con)
   (:documentation "Return a summary of the identity of the constituent."))

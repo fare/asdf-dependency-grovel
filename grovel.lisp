@@ -671,7 +671,7 @@
                 `(,@(sort
                      `(,@(or (overridden-dependencies* component)
                              (mapcar #'enough-component-spec depends-on))
-                         ,@(additional-dependencies* component))
+                       ,@(additional-dependencies* component))
                      #'string<))
                 :test #'equal)
                ;; component initargs
@@ -707,46 +707,58 @@
 
 (defmacro operating-on-asdf-component-constituent ((component) &body body)
   "Used internally; not exported."
-  (with-gensyms (component! designator existing-con present-p con)
-    `(let* ((,component! ,component)
-            (,designator (cons (asdf:component-pathname ,component!)
-                               (constituent-designator *current-constituent*)))
-            (,con (multiple-value-bind (,existing-con ,present-p)
-                      (gethash ,designator *constituent-table*)
-                    (if ,present-p ,existing-con
-                        (setf (gethash ,designator *constituent-table*)
-                              (make-instance 'asdf-component-constituent
-                                             :parent *current-constituent*
-                                             :component ,component!)))))
-            (*current-constituent* ,con))
-       (assert (equal (constituent-designator ,con) ,designator))
-       (wtf "Operating on ~S" (constituent-summary ,con))
-       (multiple-value-prog1
-	   (noticing-*feature*-changes ,@body)
-	 (signal-new-internal-symbols :populate t)
-         (wtf "Done operating on ~S" (constituent-summary ,con))))))
+  `(operate-on-asdf-component-constituent ,component (lambda () ,@body)))
+
+(defun operate-on-asdf-component-constituent (component thunk)
+  (operate-on-file-level-constituent
+   (list* :asdf (asdf:component-pathname component)
+          (constituent-designator *current-constituent*))
+   (lambda () (make-instance 'asdf-component-constituent
+                             :parent *current-constituent*
+                             :component component))
+   thunk))
 
 (defmacro operating-on-file-constituent ((path) &body body)
   "Used internally; not exported."
-  (with-gensyms (path! designator existing-con present-p con)
-    `(let* ((,path! ,path)
-            (,designator (cons ,path! (constituent-designator
-                                       *current-constituent*)))
-            (,con (multiple-value-bind (,existing-con ,present-p)
-                      (gethash ,designator *constituent-table*)
-                    (if ,present-p ,existing-con
-                        (setf (gethash ,designator *constituent-table*)
-                              (make-instance 'file-constituent
-                                             :parent *current-constituent*
-                                             :path ,path!)))))
-            (*current-constituent* ,con)
-            (*previous-package* *package*)) ;; See Note [prev-package] below
-       (assert (equal (constituent-designator ,con) ,designator))
-       (wtf "Operating on ~S" (constituent-summary ,con))
-       (multiple-value-prog1
-           (noticing-*feature*-changes ,@body)
-         (signal-new-internal-symbols :populate t)
-         (wtf "Done operating on ~S" (constituent-summary ,con))))))
+  `(operate-on-file-constituent ,path (lambda () ,@body)))
+
+(defun operate-on-file-constituent (path thunk)
+  (operate-on-file-level-constituent
+   (list* :file path (constituent-designator *current-constituent*))
+   (lambda () (make-instance 'file-constituent
+                             :parent *current-constituent*
+                             :path path))
+   thunk))
+
+(defun operate-on-file-level-constituent (designator maker thunk)
+  (let ((*previous-package* *package*)) ;; See Note [prev-package] below
+    (operate-on-constituent designator maker thunk)))
+
+(defmacro operating-on-form-constituent ((index pos summary) &body body)
+  `(operate-on-form-constituent ,index ,pos ,summary (lambda () ,@body)))
+
+(defun operate-on-form-constituent (index pos summary thunk)
+  (operate-on-constituent
+   (list* :form index (constituent-designator *current-constituent*))
+   (lambda () (make-instance 'form-constituent
+                             :parent *current-constituent*
+                             :position pos
+                             :summary summary))
+   thunk))
+
+(defun operate-on-constituent (designator maker thunk)
+  (let* ((con (multiple-value-bind (existing-con present-p)
+                  (gethash designator *constituent-table*)
+                (if present-p
+                    existing-con
+                    (setf (gethash designator *constituent-table*) (funcall maker)))))
+         (*current-constituent* con))
+    (assert (equal (constituent-designator con) designator))
+    (wtf "Operating on ~S" (constituent-summary con))
+    (multiple-value-prog1
+        (noticing-*feature*-changes (funcall thunk))
+      (signal-new-internal-symbols :populate t)
+      (wtf "Done operating on ~S" (constituent-summary con)))))
 
 ;; Note [prev-package]: Notice that operating-on-file-constituent binds
 ;; *previous-package* to *package*, and operating-on-form-constituent doesn't.
@@ -758,28 +770,6 @@
 ;; function.  However, operating-on-form-constituent must _not_ bind
 ;; *previous-package*, because otherwise later forms in the same file wouldn't
 ;; observe the change to *previous-package* made by the in-package handler.
-
-(defmacro operating-on-form-constituent ((index pos summary) &body body)
-  "Used internally; not exported."
-  (with-gensyms (index! designator existing-con present-p con)
-    `(let* ((,index! ,index)
-            (,designator (cons ,index! (constituent-designator
-                                        *current-constituent*)))
-            (,con (multiple-value-bind (,existing-con ,present-p)
-                      (gethash ,designator *constituent-table*)
-                    (if ,present-p ,existing-con
-                        (setf (gethash ,designator *constituent-table*)
-                              (make-instance 'form-constituent
-                                             :parent *current-constituent*
-                                             :position ,pos
-                                             :summary ,summary)))))
-            (*current-constituent* ,con))
-       (assert (equal (constituent-designator ,con) ,designator))
-       (wtf "Operating on ~S" (constituent-summary ,con))
-       (multiple-value-prog1
-           (noticing-*feature*-changes ,@body)
-         (signal-new-internal-symbols :populate t)
-         (wtf "Done operating on ~S" (constituent-summary ,con))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Initially Grovel Dependencies ;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -908,7 +898,8 @@
 ;;             (output-component-file stream deps))
 ;;           state))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;; Consituent Reporting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Reporting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun print-constituent-dependency-report (&key (stream t))
   (let ((constituent *current-constituent*))
@@ -1001,21 +992,17 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defmacro instrumented-load (file &rest args)
-  (with-gensyms (file!)
-    `(let ((,file! ,file))
-       (operating-on-file-constituent (,file!)
-         (with-groveling-readtable
-           (with-groveling-macroexpand-hook
-             (load ,file! ,@args)))))))
+(defun instrumented-load (file &rest args)
+  (operating-on-file-constituent (file)
+    (with-groveling-readtable
+      (with-groveling-macroexpand-hook
+        (apply #'load file args)))))
 
-(defmacro instrumented-compile-file (file &rest args)
-  (with-gensyms (file!)
-    `(let ((,file! ,file))
-       (operating-on-file-constituent (,file!)
-         (with-groveling-readtable
-           (with-groveling-macroexpand-hook
-             (compile-file ,file! ,@args)))))))
+(defun instrumented-compile-file (file &rest args)
+  (operating-on-file-constituent (file)
+    (with-groveling-readtable
+      (with-groveling-macroexpand-hook
+        (apply #'compile-file file args)))))
 
 (defun print-big-ol-dependency-report (&key (stream t))
   (print-constituent-dependency-report :stream stream)
