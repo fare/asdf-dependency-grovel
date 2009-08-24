@@ -30,7 +30,7 @@
 (defsystem asdf-dependency-grovel
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
-               (:file "classes" :depends-on ("package"))
+               (:file "classes" :depends-on ("package" "variables"))
                (:file "asdf-classes" :depends-on ("package"))
                (:file "grovel" :depends-on ("package" "variables" "classes" "asdf-classes"))
                (:file "asdf-ops" :depends-on ("package" "variables" "grovel"))

@@ -61,6 +61,9 @@
                 failed))
     (length failed)))
 
+;(trace asdf:perform asdf-dependency-grovel:signal-user asdf-dependency-grovel:signal-provider)
+
+
 ;; Currently unused (commented out in the test script).
 ;; (defun check-base-deps ()
 ;;   (asdf:oos 'asdf-dependency-grovel:compare-dependency-op :test-serial))

@@ -633,7 +633,7 @@
 		 :defaults pathname))
 
 (defun normalized-component-name (component)
-  (pathname-name (make-pathname :defaults (asdf:component-name component))))
+  (pathname-name (asdf:component-relative-pathname component)))
 
 ;; Currently used only by initially-grovel-dependencies.
 (defun output-component-file (stream dependencies &key

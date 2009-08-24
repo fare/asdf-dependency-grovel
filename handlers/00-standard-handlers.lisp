@@ -362,7 +362,7 @@
                                                 #'clause-second-element)
                                (clause-contents :shadowing-import-from
                                                 #'clause-second-element))
-          :do (signal-user (canonical-package-name use) 'defpackage))
+          :do (signal-user use 'defpackage))
     ;; Signal imports of symbols (they need to exist before they can
     ;; be imported).
     (when *check-internal-symbols-p*
