@@ -71,6 +71,7 @@
                (:file "u-defpackage")
                (:file "u-defpackage.1")
                (:file "u-defpackage.2")
+               (:file "u-defpackage.3")
 
                ;; defunoids / instrumented stuff
                (:file "u-defun")
