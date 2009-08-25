@@ -226,7 +226,7 @@
   ;; defined through the current system definition.
   (loop :for superclass :in (third form)
         :do (signal-user superclass (first form))
-        :do (signal-user (second form) 'deftype))
+        :do (signal-user superclass 'deftype))
   (loop :for slot :in (fourth form)
         :for slot-type = (and (consp slot)
                               (getf (cdr slot) :type))
