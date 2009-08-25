@@ -1,3 +1,1 @@
-(defpackage :my-package-user
-  (:use )
-  (:use :cl :t-dfpkg-2))
+(defpackage use-test-defpackage (:use :common-lisp :tdp))

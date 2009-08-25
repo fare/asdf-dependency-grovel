@@ -354,7 +354,7 @@
            (clause-second-element (clause)
              (list (second clause))))
     ;; Provide each nickname of the package.
-    (loop :for nickname :in (clause-contents :nickname)
+    (loop :for nickname :in (clause-contents :nicknames)
           :do (signal-provider nickname 'defpackage))
     ;; Signal uses of packages.
     (loop :for use :in (append (clause-contents :use)
