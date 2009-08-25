@@ -22,7 +22,7 @@
               (t (string package-designator)))
             :asdf-dependency-grovel.packages)))
 
-;; Currently used only by the defconstant handler.
+;; Currently unused.
 (defmacro symbol-macroify (operator name &rest args &environment env)
   (let ((new-name (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-~A--~A"
                                    operator name))))
@@ -65,7 +65,7 @@
 ;; Used all over the place.
 (defun signal-provider (name form-type)
   "Signal that symbol `name' of kind `form-type' is being provided by the
-   current component.  For example, (defun foo ...) would signal with `name'
+   current constituent.  For example, (defun foo ...) would signal with `name'
    foo and `form-type' defun."
   ;; If we're using SBCL, we may need to filter out occasional bogus provisions
   ;; of symbols from the SB-IMPL package.  (msteele)
@@ -80,13 +80,10 @@
 ;; Used all over the place.
 (defun signal-user (name form-type)
   "Signal that symbol `name' of kind `form-type' is being used by the
-   current component.  For example, (with-foo ...) might signal with `name'
+   current constituent.  For example, (with-foo ...) might signal with `name'
    with-foo and `form-type' defmacro."
   (when *current-constituent*
-    (let ((use (list name form-type)))
-      ;;(wtf "Signal user ~S ->~%          ~S" use
-      ;;     (constituent-summary *current-constituent*))
-      (constituent-add-use use *current-constituent*)))
+    (constituent-add-use (list name form-type) *current-constituent*))
   (values))
 
 ;; Used in a number of handlers.
@@ -107,8 +104,7 @@
         (and (second typespec)
              (signal-typespec (second typespec))
              (and (third typespec)
-                  (signal-typespec (third typespec)))))
-       (:otherwise nil)))
+                  (signal-typespec (third typespec)))))))
     ((not (null typespec))
      (signal-user typespec 'deftype))))
 
@@ -143,15 +139,6 @@
      (signal-user ',name 'define-symbol-macro)
      (setf ,expression ,new-value)))
 
-;; Experimental (msteele):
-;; (defun signal-variable-use (var-name kind value-name)
-;;   (signal-user var-name kind)
-;;   (symbol-value value-name))
-;; (defsetf signal-variable-use (var-name kind value-name) (new-value)
-;;   `(progn
-;;      (signal-user ,var-name ,kind)
-;;      (setf (symbol-value ,value-name) ,new-value)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Groveling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Usually, with-groveling-readtable and with-groveling-macroexpand-hook are
@@ -170,21 +157,6 @@
                                      *macroexpand-hook*))
          (*macroexpand-hook* #'groveling-macroexpand-hook))
      ,@body))
-
-;; (defmacro with-groveling-environment ((state verbose debug-object-types
-;; 					     base-pathname)
-;;                                             &body body)
-;;   `(let* ((*current-dependency-state* ,state)
-;;           (*features* (adjoin 'groveling *features*))
-;;           (*compile-print* ,verbose)
-;;           (*compile-verbose* ,verbose)
-;;           (*debug-object-types* ,debug-object-types)
-;;           (*default-pathname-defaults* ,base-pathname)
-;;           (*grovel-dir-suffix* (get-universal-time))
-;;           ;;(*break-on-signals* 'error)
-;;           (*suspected-variables* (slot-value *current-dependency-state*
-;;                                              'suspected-variables)))
-;;      ,@body))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Instrumentation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -775,26 +747,6 @@
 
 ;; Everything below is used only by initially-grovel-dependencies.
 
-;; ;; Used only by cull-dependencies and dependency-forms.
-;; (defun cached-component-dependencies (state component)
-;;   (gethash component (slot-value state 'component-dependencies)))
-
-;; ;; Used only by cull-dependencies.
-;; (defun make-dependency-space (component state dependency-space)
-;;   (dolist (dep (gethash component
-;;                         (slot-value state 'component-dependencies)))
-;;     (if (= 1 (incf (gethash dep dependency-space 0)))
-;;         (make-dependency-space dep
-;;                                state dependency-space))))
-
-;; ;; Used only by dependency-forms.
-;; (defun cull-dependencies (component state)
-;;   (let ((dependency-space (make-hash-table)))
-;;     (make-dependency-space component state dependency-space)
-;;     (loop :for dep :in (cached-component-dependencies state component)
-;;           :if (= 1 (gethash dep dependency-space))
-;;             :collect dep)))
-
 ;; Currently used only by dependency-forms and constituent-dependency-forms.
 (defun asdf-system-file-components (system)
   "Flatten the tree of modules/components into a list that
@@ -805,28 +757,12 @@
         :else
           :collect component))
 
-;; ;; Currently used only by initially-grovel-dependencies.
-;; (defun dependency-forms (state interesting-systems &key cull-redundant)
-;;   (let ((s-deps (slot-value state 'system-dependencies)))
-;;     (loop :for system :in interesting-systems
-;;           :collect `(,system
-;;                      :depends-on
-;;                      ,(loop :for d-sys :being :the :hash-keys
-;;                             :of (gethash system s-deps (make-hash-table))
-;;                             :collect d-sys)
-;;                      :components
-;;                      ,(loop :for comp :in (asdf-system-file-components system)
-;;                             :for deps = (if cull-redundant
-;;                                             (cull-dependencies comp state)
-;;                                             (cached-component-dependencies
-;;                                              state comp))
-;;                             :collect `(,comp :depends-on ,deps))))))
-
 (defgeneric enclosing-file-constituent (constituent)
   (:method (x)
     nil)
   (:method ((x asdf-component-constituent))
-    (when (typep (asdf-component-constituent-component x) 'instrumented-cl-source-file)
+    (when (typep (asdf-component-constituent-component x)
+                 'instrumented-cl-source-file)
       x))
   (:method ((x file-constituent))
     x)
@@ -840,7 +776,8 @@
         (system-deps (make-hash-table :test 'eql)))
     ;; Populate the component-deps and system-deps tables.
     (loop
-      :for con1 :being :each :hash-key :of constituent-deps :using (:hash-value deps)
+      :for con1 :being :each :hash-key :of constituent-deps
+        :using (:hash-value deps)
       :for filecon1 = (enclosing-file-constituent con1)
       :when (typep filecon1 'asdf-component-constituent) :do
       (let ((comp1 (asdf-component-constituent-component filecon1)))
@@ -887,16 +824,6 @@
                                                 interesting-systems)))
         (output-component-file stream deps))
       *current-constituent*)))
-;;       (with-new-groveling-environment (verbose debug-object-types
-;;                                        base-pathname)
-;;         (let ((state *current-dependency-state*))
-;;           (dolist (system systems)
-;;             (with-groveling-macroexpand-hook
-;;               (asdf:oos 'asdf:load-op system :verbose verbose)))
-;;           (let ((deps (dependency-forms state interesting-systems
-;;                                         :cull-redundant cull-redundant)))
-;;             (output-component-file stream deps))
-;;           state))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Reporting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1007,36 +934,6 @@
 (defun print-big-ol-dependency-report (&key (stream t))
   (print-constituent-dependency-report :stream stream)
   (print-constituent-file-splitting-strategy :stream stream))
-;;   (let ((*print-pretty* nil) ;; Don't insert newlines when formatting sexps!
-;;         (comp-deps (slot-value state 'component-dependencies))
-;;         (providers (slot-value state 'providers))
-;;         (users (slot-value state 'users)))
-;;     ;; Print a summary of which files depend on which other files and why.
-;;     (loop :for comp :being :the :hash-keys :in comp-deps
-;;           :using (:hash-value deps) :do
-;;        (progn
-;;          (format stream "~&File ~S depends on:~%" comp)
-;;          (dolist (dep deps)
-;;            (format stream "    file ~S because of:~%" dep)
-;;            (loop :for thing :being :the :hash-keys :in (gethash comp users)
-;;                  :if (loop :for (counter provider) :in (gethash thing providers)
-;;                            :if (equal provider dep) :do (return t)
-;;                            :finally (return nil)) :do
-;;               (format stream "        ~{~S  (~S)~}~%" thing)))))
-;;     ;; Print a summary of any cyclic dependencies, using DFS to find cycles.
-;;     (format stream "~&Dependency cycles:~%")
-;;     (loop :with expanded = nil
-;;           :with stack = (loop :for comp :being :the :hash-keys :in comp-deps
-;;                               :collecting (list comp))
-;;           :until (null stack) :do
-;;           (let* ((chain (pop stack))
-;;                  (comp (car chain)))
-;;             (unless (member comp expanded :test #'equal)
-;;               (push comp expanded)
-;;               (dolist (dep (gethash comp comp-deps))
-;;                 (if (member dep chain :test #'equal)
-;;                     (format stream "    ~S~%" (reverse chain))
-;;                     (push (cons dep chain) stack))))))))
 
 ;;;;;;;;;;;;;;;;;; Fine-Grain Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;
 

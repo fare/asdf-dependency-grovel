@@ -1,0 +1,364 @@
+Basic Overview
+==============
+
+First, I'll give a brief overview of how asdf-dependency-grovel (ADG) works, so
+that you'll be better able to understand the nitty-gritty details that come
+later.
+
+
+Constituents
+------------
+
+A "constituent" represents a piece of the codebase.  Constituents are arranged
+into a tree, with the children of a constituent representing disjoint pieces of
+their parent constituent.  The constituent objects are used to store
+information about dependencies between different parts of the codebase.
+
+ADG's constituent system is designed to be quite flexible at representing
+different shapes and sizes of codebases, but in most cases (including QPX), the
+constituent tree will have exactly three levels.  At the top, there is a single
+root constituent that represents the whole codebase.  The root constituent has
+as children one constituent for each file in the codebase -- these are called
+"file-constituents".  Each file-constituent has as children one constituent for
+each top-level form in the file -- these are called "form-constituents".  The
+goal of ADG is to determine the dependencies between the various
+form-constituents, which allows it not only to infer dependencies between
+files, but also to determine how the top-level forms could be reorganized
+between files so has to eliminate file-level dependency cycles.
+
+
+Provisions and Uses
+-------------------
+
+ADG detects dependencies through the use of the `signal-provider' and
+`signal-user' functions.  When a form "provides" something -- for example, a
+defun form provides the function being defined -- then ADG will call the
+signal-provider function with the name of the thing being provided (as a
+symbol) and a symbol indicating what kind of thing was provided.  This will
+cause that "provision" -- that is, the name/kind pair -- to be added to the
+current constituent's set of provisions.  Similarly, when a form "uses"
+something (at compile time), ADG will call the signal-user function with the
+name and kind of the thing used, which adds the use to the current
+constituent's list of uses.  In general, if constituent A provides X and
+constituent B uses X, then we conclude that B depends on A.  This is ADG's
+fundamental mechanism for determining dependencies.
+
+This approach is relatively easy to implement, and usually works, but it is
+also flawed.  Suppose that we have three forms: A, B, and C.  Forms A and B are
+both (defconstant +sqrt2+ 1.41), and form C is (defvar *foo* +sqrt2+).  ADG
+will call (signal-provider '+sqrt2+ 'defconstant) for each of forms A and B,
+and will call (signal-user '+sqrt2+ 'defconstant) for form C (as well as
+calling (signal-provider '*foo* 'defvar)).  ADG will then conclude that form C
+depends on _both_ A and B, when in reality, Common Lisp allows it to depend on
+_either_ of A or B, since defconstants may be repeated as long as they all have
+the same value for the constant.  ADG simply doesn't try to handle this case
+correctly, largely because doing so would complicate some of the later stages
+with relatively little benefit.
+
+Finally, it should be noted that ADG detects provisions and uses heuristically,
+and as a result, will frequently have both false negatives and false positives
+when detecting dependencies (we'll see later on why this is, sadly,
+unavoidable).  The main trick to making ADG work is to balance these so that
+the wrong answer it comes up with is still good enough to successfully
+eliminate the dependency cycles in the particular codebase of interest.
+
+
+Cycle Resolution
+----------------
+
+Once ADG has collected all the provisions and uses for each constituent, it
+builds a directed graph with form-constituents as nodes and dependencies as
+edges.  We will assume that the resulting graph will be acyclic, which should
+be true if the code was able to compile and if the dependency detection didn't
+have too many false positives.
+
+The goal in this stage is to eliminate dependency cycles between files.  We
+could do this by splitting _every_ form into its own file, but that would
+create a huge mess.  Or, we could merge everything into one file, but that is a
+similarly degenerate solution.  Or, we could drastically rearrange the code,
+but that too would be confusing to the poor humans to organized these forms
+into each of these files for a reason.  The compromise the ADG takes is to only
+ever split existing files into pieces (not to merge anything), and try to make
+as few splits as possible.
+
+To do this, ADG starts with the graph of form-constituents, and treats each
+form-constituent as though it were a separate file; it then merges together
+pairs of nodes into supernodes as much as possible, subject to the constraints
+that 1) it may only merge nodes that originally came from the same file, and 2)
+it must never perform merges that would introduce a cycle into the graph.  As
+it turns out, perfectly minimizing the number of nodes in the final graph is
+NP-hard, so ADG uses a greedy algorithm that seems to make for a reasonable
+approximation.
+
+Once ADG has finished merging the graph, it sorts the nodes in that graph
+topologically to create a new file order.  In order to protect against false
+negatives in the dependency detection, ADG uses a _stable_ topological sort,
+keeping the files as close to the original file order as possible (thus, if
+file B depends on file A and ADG didn't notice, there's still a good chance
+that file B won't load until after file A in the new file order).
+
+
+File Splitting
+--------------
+
+Once ADG has determined how to split the files and what order to put the new
+files in, we can run its output through a program that will automatically
+divide up the actually files.  Here we have to deal with one hitch -- ADG
+doesn't really understand the significance of in-package forms, and will treat
+them just as any other form, to be put one one piece or another of a split
+file.  To deal with this, the program that actually splits up the files will
+check for pieces of files that don't have the in-package declaration; for each
+such piece, it will check the _original_ file to see if it has only a single
+in-package form, and if so, it will copy that form to the top of the split
+piece.  If the file has multiple in-package forms (an unusal case), then the
+program simply prints a warning, indicating that a human should do it manually.
+Fortunately, there are usually no such warnings.
+
+
+
+
+How it _Really_ Works
+=====================
+
+Now that you have a basic idea of what ADG does, let's take a look at the nasty
+details of how it detects provisions and uses.  Beware -- this will be an
+adventuresome journey into just how annoying Common Lisp can be as a language.
+
+
+Fine-Grain Instrumented Load
+----------------------------
+
+The first piece of trickery is how ADG can keep track of which top-level form
+in the file it is working with, so that it can instantiate the constituents
+correctly.  ADG provides a drop-in replacement for the load function called
+fine-grain-instrumented-load that does this.  Intuitively, this simply needs to
+pass the file through the Lisp reader to get a list of forms, and then eval
+each form in a new form-constituent.  However, the Common Lisp spec requires a
+variety of particular, subtle behaviors from the load function, which makes it
+much more difficult to provide a portable, drop-in replacement.  Thus, ADG
+simply uses a modified copy of the load function from the SBCL source code.
+That makes it unportable, but oh, well.  The replacement load function
+instantiates a new form-constituent for each top-level form, and also
+preprocesses each form before eval-ing it (this step is described in later
+sections).  Finally, the replacement load function keeps track of some
+anciliary data, such as the index of the form in the file (e.g. 1st form, 2nd
+form, etc.), which serves to uniquely identify the form, and the position of
+the form in the file as an index into the character stream, which aids in the
+automatic file splitting later on.
+
+
+The Macroexpand-Hook and Handlers
+---------------------------------
+
+The primary mechanism that ADG uses to find dependencies is a custom
+*macroexpand-hook*.  This is a function that Common Lisp will call whenever it
+is about to expand a macro; this gives ADG an opportunity to examine the macro
+form, or even to alter it.
+
+In general, when the code expands a macro foo, ADG calls (signal-user 'foo
+'defmacro) to indicate that a macro is being used.  However, ADG also has a
+number of "handlers" which it uses to give special treatment to a number of
+standard Common Lisp macros.  For example, defmacro is itself a macro, and when
+ADG's macroexpand-hook sees a defmacro of a macro foo, it calls
+(signal-provider 'foo 'defmacro).  When ADG sees a defun macro for a function
+foo, it calls (signal-provider 'foo 'defun) and also alters the function
+definition to include a call to (signal-user 'foo 'defun), so that if the
+function is called at compile time, it will signal a use of the function.  When
+ADG sees a defstruct macro, it does all kinds of squirrelly things, because
+defstruct is a horrible mess; among the things it does is to insert code after
+the defstruct to "retroactively" instrument the accessor functions that are
+automatically generated by the defstruct macro.  There are a wide variety of
+other handlers defined in ADG, and more can be easily added if necessary.
+
+It should be noted that it is largely a fortunate coincidence that many of the
+things that we are interested in (e.g. defmacro, defun, defvar, etc.) happen to
+be defined as macros in Common Lisp, and can thus be caught by the
+macroexpand-hook.  There are other things we might be interested in, such as
+eval-when, that are defined as special forms; we have no easy way to detect
+these without walking the code "manually".  (Incidentally, _Common Lisp: The
+Language_, second edition, describes a facility called *evalhook* that allows a
+user-defined function to be called on _every_ subform as it is evaluated.  Such
+a facility would be extremely useful for ADG.  Unfortunately, that facility is
+no longer part of the Common Lisp spec, and is not supported by SBCL.)
+
+
+Detecting Variable Uses
+-----------------------
+
+It is generally easy for ADG to detect when global variables (or constants) are
+provided, as the macroexpand-hook will notice defvar and defparameter (and
+defconstant) forms (ADG treats defvar and defparameter as essentially
+equivalent for the purposes of dependency detection -- when it sees a
+defparameter form, it signals a provision of kind defvar).  What is harder is
+to detect when a global variable or constant is being used at compile time.
+
+The trouble is that there are a lot of different ways to "use" a global
+variable at compile time.  You could read the variable and use its value at
+compile time.  You could alter the value of the variable at compile time with
+setf or setq.  You could dynamically rebind the variable at compile time with
+let.  You could even quote the variable name and pass it to a function like
+boundp or constantp, at compile time.  And yes, QPX does all of the above.
+
+There are several clever strategies that don't work.  One is to instrument
+defvars so that the variable name is actually symbol-macro that expands to some
+code that signals a use of the variable and then returns the value.  You can
+even write a setf function so that setf will work with such macros.
+Unfortunately, this doesn't work with let forms or quoted symbols, since those
+are not subject to symbol-macroexpansion.  Another neat idea would be to use
+some kind of alternative environment object that could somehow detect when
+global variables (or other things!) are being used.  However, there is
+explicitly no portable way to do this, and I can't even find a non-portable way
+to do it in SBCL.
+
+In the end, what ADG actually does is incredibly stupid.  When it sees a
+defvar, not only does it signal a provision, but it adds the symbol to a set
+called *suspected-variables*.  Before evaluating each form, ADG performs a
+preprocessing step that, among other things (see later sections), walks all the
+symbols in the form, looking for ones that are in *suspected-variables*; if it
+finds any, then it assumes that that is a use of the variable, and makes an
+appropriate call to signal-user.  Of course, this results in a number of false
+positives, since many of those appearances will not be relevant at compile
+time.  However, amazingly, it seems to be good enough.
+
+
+The Readtable and Constituent Transfers
+---------------------------------------
+
+This is where things start to get a little more hairy.
+
+QPX contains a large number of sharpdot (#.) forms.  These indicate a form that
+is to be evaluated at read-time, and the result to be inserted into the code in
+place of the sharpdot form.  Of course, these sharpdot forms may well make use
+of functions defined in other files, in which case there is a dependency
+between the top-level form containing the sharpdot and the top-level form that
+provided the function (or whatever) that the sharpdot form used -- in
+particular, we must ensure that when we split up and reorder the files, the
+file in which the providing form ends up must come before the file in which the
+sharpdot ends up.
+
+The trouble is that the evaluation happens while the file is being read, which
+is before ADG is able to break the file up into top-level forms and set the
+*current-constituent* variable to each form-constituent in turn.  Thus, if the
+evaluation of the sharpdot invokes any signal-user calls, the use will not be
+added to the correct constituent.
+
+ADG solves this by using a modified *readtable* with a replacement sharpdot
+reader macro function (as well as other replacement reader macros -- more on
+that later).  The new sharpdot sets the *current-constituent* variable to a
+newly instantiated "temp-constituent" object -- a constituent that has no
+parent -- before evaluating the form.  Thus, this temp-constituent will catch
+any use (or provision) signals caused by the evaluation of the sharpdot form.
+Then, the replacement sharpdot function must return a piece of data containing
+both the result of the evaluation (which should be inserted into the code) as
+well as the temp-constituent object.  When we get around to evaluating the
+top-level form in which the sharpdot appeared, we will "transfer" the signals
+from the temp-constituent to the new *current-constituent*, so that the form in
+which the sharpdot appears will have the proper dependencies.
+
+Now, what should the sharpdot function return to allow us to make this
+transfer?  An obvious answer is to have it return a macro call that, when it
+expands, performs the transfer and the returns the result value.  Thus, the
+sharpdot reader macro function would return something like
+`(with-transfer-constituent ,temp-constituent ,result).  Since macroexpansion
+won't happen until we evaluate the top-level form in question, and thus when we
+have the proper *current-constituent* in place, this seems workable.  The
+trouble is that sharpdots may appear in places that are not subject to
+macroexpansion.  Instead, we will have the sharpdot reader macro function
+return the with-transfer-constituent list as before, but we will perform our
+own macroexpansion-like operation during the form preprocessing step described
+in the previous section that deals with appearances of
+with-transfer-constituent anywhere in the form.
+
+Walking a form and replacing with-transfer-constituent lists is actually much
+trickier than it sounds, because there are a number of edge cases.  For
+example, one might think that when walking a subform that is a list, one could
+simply check each item of the list to see if the item is a list beginning with
+the symbol 'with-transfer-constituent.  Not so.  Someone might write something
+like (progn . #.(loop ...)), in which case the 'with-transfer-constituent
+symbol will appear as the second item in a list.  Yes, that code is legal Lisp.
+Yes, QPX does that.  A lot.
+
+All told, this strategy for dealing with sharpdots works pretty well, but it
+opens up a can of worms -- there are a handful of very nasty, very subtle
+issues that I won't go into here (but that are documented in the code).
+Suffice to say that these issues are largely the result of certain parts of
+Common Lisp, particularly backquotes and compiler macros, being underspecified
+in perilous ways.
+
+
+Manual Annotations
+------------------
+
+Despite all the heuristics ADG uses to try to find dependencies, sometimes you
+have to give it some hints.  This is a slightly dicey game, and requires some
+familiary with ADG to know how to make it work, but when carefully done it can
+help tremendously.
+
+One all too common case is to have a global variable that is a hash table, and
+have one file that populates the hash table at compile time, and another file
+that requires the hash table to be populated in order to compile.  There's not
+really any way for ADG to understand this dependency, but it's usually easy to
+annotate manually: the function that adds an entry to the table can make a call
+to signal-provider with some appropriate tag, and the function that expects the
+entry to be there can call signal-user.  ADG adds the symbol :groveling to
+*featuresa* when it's running, so you can use code like
+
+  #+groveling(asdf-dependency-grovel:signal-user foo-key 'foo-table-entry)
+
+to ensure that the codebase won't be affected when you're not using ADG.
+
+Another possible problem is when there are two adjacent forms that should be
+kept together, but ADG fails to understand this and happens to try to split
+them into separate files.  One example from QPX is code that looks like:
+
+  (defvar *foo*)
+  (with-build-version :foobar-3
+    (setf *foo* (make-hash-table)))
+
+These are two separate top-level forms, but splitting them up can cause
+breakage, and ADG is easily confused by defvar dependencies.  A simple solution
+is to simply wrap these two forms into a progn, thus making them a single
+top-level form and preventing ADG from splitting them:
+
+  (progn
+    (defvar *foo*)
+    (with-build-version :foobar-3
+      (setf *foo* (make-hash-table))))
+
+
+
+
+How to Use ADG
+==============
+
+*** more here ***
+
+
+
+--------------------------------------------------------------------------------
+
+First, let's worry about other reader macros.  Sharpdots can appear just about
+anywhere, including inside other reader macros.  For example, you could write
+something like #+#.(stuff).  Yes, QPX does that too.  Fortunately, that's no
+trouble -- we just need to replace other reader macros in the readtable so that
+the perform the proper preprocessing step before doing their thing.  While
+we're at it, we can instrument sharpquote to signal a use of the function in
+question; of course, like sharpdot, it'll have to return a
+with-transfer-constituent form so that the signal can get properly transferred
+in the preprocessing step.  That's easy enough, until we get to the next issue.
+
+How about backquotes?  What happens when you write `(foo #'(setf ,bar)) after
+we replace sharpquote as above?  Actually, the behavior is not portably
+defined, because Common Lisp doesn't specify how backquote works, only what it
+does when evaluated (in particular, the value of (car (quote `(a ,b))) is
+undefined in Common Lisp).  In SBCL, I've found that that snippet causes quotes
+to appear in unexpected places, causing the with-transfer-constituent
+replacement to get confused.  Mercifully, this sort of thing actually doesn't
+seem to crop up in QPX (although it does in QRES), and ADG currently makes no
+attempt to deal with it.
+
+Now, how about compiler macros?  Compiler macros have the useful (but not well
+specified) property that if a compiler macro function returns the same form
+unchanged, then compiler-macroexpansion of that form halts, even though the
+resulting form is of course still a valid compiler macro.  Thus, when
+performing with-transfer-constituent replacement, we must be

@@ -1,5 +1,8 @@
 ;; Classes used by asdf-dependency-grovel.
 
+;; Originally, this file just held some classes.  Now it holds a bunch of
+;; stuff.  It should probably be renamed, or reorganized.
+
 #+xcvb (module (:depends-on ("variables")))
 
 (cl:in-package #:asdf-dependency-grovel)
@@ -25,10 +28,15 @@
        (item-key (item) (car item))
        (item-obj (item) (cdr item)))
   (defun make-heap (&key key)
+    "Make an empty min-heap.  The :key argument should be a function mapping
+     elements of the heap to a priority value (typically a number) by which
+     that item will be sorted.  If no :key function is given, the element
+     itself is used as the priority value."
     (unless key
       (setf key (lambda (x) x)))
     (cons key (make-array 0 :adjustable t :fill-pointer t)))
   (defun heap-insert (obj heap)
+    "Add an element to the heap."
     (let* ((key (funcall (heap-key-function heap) obj))
            (item (cons key obj))
            (vec (heap-vector heap))
@@ -42,6 +50,10 @@
                      index pindex)))))
     (values))
   (defun heap-pop (heap)
+    "Remove the element with the smallest priority-value from the heap and
+     return two values: the element removed (or nil if the heap was already
+     empty), and a boolean that is nil if the heap was indeed already empty or
+     t otherwise."
     (when (heap-empty-p heap)
       (return-from heap-pop (values nil nil)))
     (let* ((vec (heap-vector heap))
@@ -74,8 +86,10 @@
           (setf (elt vec index) item)))
       (values min-obj t)))
   (defun heap-count (heap)
+    "Return the number of elements in the heap."
     (fill-pointer (heap-vector heap)))
   (defun heap-empty-p (heap)
+    "Return t if the heap is empty, nil otherwise."
     (= 0 (heap-count heap))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Hashsets ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -121,6 +135,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Base class for constituents.
 (defclass constituent ()
   ((parent
     :initarg :parent
@@ -139,11 +154,11 @@
    (uses
     :initform (make-hashset :test 'equal)
     :accessor constituent-uses
-    :documentation "A list of things used by this constituent.")
+    :documentation "A hashset of things used by this constituent.")
    (provisions
     :initform (make-hashset :test 'equal)
     :accessor constituent-provisions
-    :documentation "A list of things provided by this constituent.")))
+    :documentation "A hashset of things provided by this constituent.")))
 
 (defmethod initialize-instance :after ((con constituent) &key)
   (let ((parent (slot-value con 'parent)))
@@ -279,9 +294,15 @@
                 (constituent-descendant-p (constituent-parent con1) con2))))
 
 (defun constituent-add-use (use con)
+  "Add a use to the constituent.  The use should be a list of two elements: the
+   name of the thing used, and a symbol indicating the kind of thing used,
+   e.g. '(*foo* defvar)."
   (hashset-add use (constituent-uses con)))
 
 (defun constituent-add-provision (provision con)
+  "Add a provision to the constituent.  The provision should be a list of two
+   elements: the name of the thing provided, and a symbol indicating the kind
+   of thing provided, e.g. '(*foo* defvar)."
   (hashset-add provision (constituent-provisions con)))
 
 (defun propagate-constituent-downward (con)
@@ -305,7 +326,7 @@
       (constituent-add-use use con))))
 
 (defun constituent-provision-table (top)
-  "Create a table mapping things to constituents that provide them."
+  "Create a hash table mapping provisions to constituents that provide them."
   (let ((table (make-hash-table :test 'equal)))
     (walk-constituents-preorder (con top)
       (do-hashset (provision (constituent-provisions con))
@@ -333,6 +354,8 @@
     table))
 
 (defun get-file-constituents (top)
+  "Return a list of file-constituents that are descendants of the given
+   constituent."
   (let ((file-constituents nil))
     (walk-constituents-postorder (con top)
       (typecase con (file-constituent (push con file-constituents))))

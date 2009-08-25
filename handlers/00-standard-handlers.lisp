@@ -1,13 +1,4 @@
 ;;; Handlers for functions defined in the CLHS.
-;;;
-;;; TODO:
-;; * handle more def*:
-;;  * defvar & defparameter - works for symbols, but thinks any use
-;;    /somewhere/ in a macro is a dependency.
-;;  * define-compiler-macro - argh. seriously, no idea. if you use
-;;    this at compile/load time, sorry.
-;;  * deftype - we can signal that it was provided, but have to walk
-;;    declarations in def* and generally almost /everwhere/. not fun.
 
 #+xcvb (module (:depends-on ("grovel")))
 
@@ -53,6 +44,13 @@
 ;;       (setf (gethash name *adg-specials*)
 ;;             (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-SPECIAL--~A" name)))))
 
+;; (defun signal-variable-use (var-name kind value-name)
+;;   (signal-user var-name kind)
+;;   (symbol-value value-name))
+;; (defsetf signal-variable-use (var-name kind value-name) (new-value)
+;;   `(progn
+;;      (signal-user ,var-name ,kind)
+;;      (setf (symbol-value ,value-name) ,new-value)))
 
 ;; ;; When we hit a declaim, we need to watch out for special variable
 ;; ;; declarations (all other declarations can be left as-is).  Once a name is
@@ -257,9 +255,9 @@
       (let (;; Determine the prefix used to create accessor function names.
             (prefix (let ((conc-name-option (assoc :conc-name struct-options)))
                       (if conc-name-option
-                        (let ((c (second conc-name-option)))
-                          (if c (string c) ""))
-                        (concatenate 'string (symbol-name name) "-"))))
+                          (let ((c (second conc-name-option)))
+                            (if c (string c) ""))
+                          (concatenate 'string (symbol-name name) "-"))))
             ;; Get the list of slot descriptions by chopping off the docstring
             ;; (if any) from `body'.
             (slot-descriptions (if (and (consp body) (stringp (car body)))
