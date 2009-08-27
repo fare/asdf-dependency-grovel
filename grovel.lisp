@@ -147,12 +147,13 @@
 ;; applied separatedly on each form).
 
 (defmacro with-groveling-readtable (&body body)
+  "Turn on the groveling readtable within the body."
   `(let ((*readtable* (make-instrumented-readtable)))
      ,@body))
 
 (defmacro with-groveling-macroexpand-hook (&body body)
   "Turn on the groveling-macroexpand-hook within the body.  This macro is
-   idempotent, so it's safe to nest it."
+   idempotent, so it's safe to nest it (and we occasionally do)."
   `(let ((*old-macroexpand-hook* (or *old-macroexpand-hook*
                                      *macroexpand-hook*))
          (*macroexpand-hook* #'groveling-macroexpand-hook))
@@ -206,7 +207,8 @@
 ;; Used only by replace-transfers.
 (defun transfer-constituent (con)
   "Add all provisions and uses in the given constituent to the current
-   constituent."
+   constituent.  Typically, the given constituent will be a temp-constituent,
+   for example one produced by our instrumented sharpdot reader-macro."
   (wtf "Begin transfer ~S ->~%          ~S" (constituent-summary con)
          (constituent-summary *current-constituent*))
   (do-hashset (use (constituent-uses con))
@@ -263,8 +265,11 @@
         (t form)))
 
 (defun check-for-transfers (form)
+  "Peform any transfers appearing in the given form, and return a copy of the
+   form with transfers removed; if the given contains no transfers, return the
+   original form object (rather than a copy)."
   ;; If there are no transfers, then we must return the actual original form.
-  ;; Otherwise, subtle things can break.
+  ;; Otherwise, subtle things can break (compiler-macros, for example).
   (do-walk-symbols (symbol form)
     (when (eql symbol 'with-transfer-constituent)
       (return-from check-for-transfers (replace-transfers form))))
