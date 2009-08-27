@@ -404,6 +404,12 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Macro Expansion ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; TODO does-not-macroexpand is sort of misnomer, because when a handler uses
+;; it, the macro is still going to expand -- it's just that the handler is not
+;; modifying the form to be expanded.  We should probably change the names of
+;; the does[-not]-macroexpand[-with-foo] functions and macros to something
+;; less misleading.
+
 (defun does-not-macroexpand ()
   "A handler can return (does-not-macroexpand) to indicate that does not wish
    to provide any special expansion, and will thus defer to the normal
@@ -463,7 +469,9 @@
   (if (listp form)
       ;; If the form is a list, we're going to do some magic.
       (progn
-        ;; Step 1: Preprocess the form if necessary.
+        ;; Step 1: Preprocess the form if necessary (it will only be necessary
+        ;; if we're not using fine-grain instrumentation, because fine-grain
+        ;; instrumentation preprocesses all forms before evaluating them).
         (when *preprocess-form-p*
           (setf form (preprocess-form form)))
         ;; Step 2: Hand the form over to handle-macroexpansion, which will
@@ -486,8 +494,9 @@
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
 (defun strip.lisp (name)
-  (if (and (< 5 (length name)) (equal ".lisp" (subseq name (- (length name) 5))))
-    (subseq name 0 (- (length name) 5))))
+  (if (and (< 5 (length name))
+           (equal ".lisp" (subseq name (- (length name) 5))))
+      (subseq name 0 (- (length name) 5))))
 
 (defun enough-component-spec (c &optional pn-p)
   (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
@@ -673,9 +682,6 @@
          ;; Indicate that we are groveling.
          (*features* (adjoin :groveling *features*)))
      ,@body))
-
-;; TODO At some point, we may want to make a macro for making the various
-;;      operating-on-foo-constituent macros.
 
 (defmacro operating-on-asdf-component-constituent ((component) &body body)
   "Used internally; not exported."
@@ -885,7 +891,11 @@
         (format stream "    d~S~%" (gethash other designator-map))))
     (format stream "ALL DONE!~%")))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Non-ASDF Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun print-big-ol-dependency-report (&key (stream t))
+  (print-constituent-dependency-report :stream stream)
+  (print-constituent-file-splitting-strategy :stream stream))
+
+;;;;;;;;;;;;;;;;;;;;;;;; Course-Grain Instrumentation ;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun instrumented-load (file &rest args)
   (operating-on-file-constituent (file)
@@ -898,10 +908,6 @@
     (with-groveling-readtable
       (with-groveling-macroexpand-hook
         (apply #'compile-file file args)))))
-
-(defun print-big-ol-dependency-report (&key (stream t))
-  (print-constituent-dependency-report :stream stream)
-  (print-constituent-file-splitting-strategy :stream stream))
 
 ;;;;;;;;;;;;;;;;;; Fine-Grain Instrumentation (Experimental) ;;;;;;;;;;;;;;;;;;
 

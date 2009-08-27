@@ -249,6 +249,7 @@
          (file-constituent-path con)
          (constituent-designator (constituent-parent con))))
 
+
 (defgeneric constituent-summary (con)
   (:documentation "Return a summary of the identity of the constituent."))
 
@@ -390,7 +391,12 @@
     dnode))
 
 (defun cyclic-reachable-p (graph start-node end-node)
-  "Return t if `end-node' is cyclic-reachable from `start-node', nil othewise."
+  "Return t if `end-node' is cyclic-reachable from `start-node', nil othewise.
+   If nodes A and B have the same parent, then node B is said to be
+   cyclic-reachable from a node A if there is a way to get from A to B that
+   passes through a node with a different parent (this implies that merging
+   nodes A and B would create a cycle between two nodes with different
+   parents)."
   (assert (hashset-contains-p start-node graph))
   (assert (hashset-contains-p end-node graph))
   (let* ((parent (dnode-parent start-node))
@@ -479,6 +485,8 @@
     graph))
 
 (defun find-a-cycle-if-any (graph)
+  "If the graph contains a cycle, return a list of the dnodes involved; if
+   there is no cycle, return nil."
   (let ((expanded (make-hashset :test 'eql))
         (stack nil))
     (do-hashset (dnode graph)
@@ -552,6 +560,7 @@
     (assert (or (null sorted-list)
                 (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
     sorted-list))
+
 #|
 (defun topologically-sort-graph (graph)
   "Given an acyclic graph of nodes, return a list of the nodes in topological
@@ -593,4 +602,5 @@
                 (hashset-empty-p (dnodes-needed-by (first sorted-list)))))
     sorted-list))
 |#
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
