@@ -218,6 +218,9 @@
 (define-macroexpand-handlers (form)
     (defclass define-condition)
   (signal-provider (second form) (first form))
+  ;; conditions are also classes, and applications depend on it to define methods
+  (signal-provider (second form) 'defclass)
+  ;; classes are also types
   (signal-provider (second form) 'deftype)
   ;; signal use of direct superclasses/superconditions. Note that we
   ;; declare a dependency only if the direct superclass is already
