@@ -52,6 +52,7 @@ to the base of the system."
 (defmacro with-dependency-tracking (comp &body body)
   `(call-with-dependency-tracking ,comp #'(lambda () ,@body)))
 
+#|
 (macrolet ((emit-perform-method (op-type)
              `(defmethod asdf:perform :around
                   ((op ,op-type)
@@ -60,6 +61,7 @@ to the base of the system."
   (emit-perform-method asdf:load-source-op)
   (emit-perform-method asdf:load-op)
   (emit-perform-method asdf:compile-op))
+|#
 
 (defmethod asdf:perform
     ((op asdf:load-source-op)

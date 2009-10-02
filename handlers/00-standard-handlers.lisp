@@ -276,6 +276,7 @@
                         (intern accessor-name-str))
               ;; Provide this accessor.
               :do (signal-provider accessor-name 'defun)
+              slot-init-value ; ignore
               ;; Generate instrumentation for the accessor.
               :collect (let ((temp (gensym)))
                          `(let ((,temp (function ,accessor-name)))
