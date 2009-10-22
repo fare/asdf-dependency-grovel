@@ -496,30 +496,52 @@
 ;; Everything below is needed only by output-component-file.
 
 ;; Used by maybe-translated-component-name and output-component-file.
+
+
+(defvar *asdf-has-sensible-component-names-p*
+  (ignore-errors (<= 1.367 (read-from-string asdf::*asdf-revision*))))
+
+;; TODO: move that upstream into ASDF, so we can use it from there?
+(defun merge-component-relative-pathname (pathname name type)
+  (multiple-value-bind (relative path filename)
+      (split-path-string name)
+  (merge-pathnames
+   (or pathname (make-pathname :directory `(,relative ,@path)))
+   (if type
+       (make-pathname :name filename :type type)
+       filename))))
+
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
-(defun strip.lisp (name)
-  (if (and (< 5 (length name))
-           (equal ".lisp" (subseq name (- (length name) 5))))
-      (subseq name 0 (- (length name) 5))))
+(defun strip-extension (name extension)
+  (let* ((lext (length extension))
+         (lnam (length name))
+         (pos (- lnam lext)))
+    (if (and (plusp lext)
+             (< 1 pos)
+             (string= name extension :start1 pos)
+             (eql #\. (char name (1- pos))))
+        (values (subseq name 0 (1- pos)) extension)
+        (values name nil))))
+
+(defun normalized-component-name (c)
+  (let ((pn (enough-namestring (normalize-pathname-directory
+                                (asdf:component-pathname c))))
+        (type (asdf:source-file-type c (asdf:component-system c))))
+    (values (strip-extension pn type) pn)))
 
 (defun enough-component-spec (c &optional pn-p)
-  (if (equal (parse-namestring (enough-namestring (asdf:component-pathname c)))
-             (make-pathname :name (asdf:component-name c) :type "lisp"))
-    (format nil "~S" (normalized-component-name c))
-    (let ((pn (parse-namestring (enough-namestring (normalize-pathname-directory
-                                                    (asdf:component-pathname c))))))
-      ;; XXX: make-pathname forms are more portable, but namestrings
-      ;; are more readable.
-      (format nil "~S~:[~; :pathname #p~S~]"
-              (strip.lisp
-               (enough-namestring
-                (normalize-pathname-directory
-                 (make-pathname :name (strip/ (asdf:component-name c))
-                                :type "lisp"
-                                :defaults (asdf:component-pathname c)))))
-              pn-p
-              (enough-namestring pn)))))
+  (multiple-value-bind (name pn) (normalized-component-name c)
+    (if (or *asdf-has-sensible-component-names-p* ;; means ASDF 1.367 or later.
+            (equal pn
+                   (ignore-errors
+                     (namestring (make-pathname
+                                  :name (strip/ name)
+                                  :type (asdf:source-file-type c (asdf:component-system c)))))))
+        (write-to-string name)
+        ;; XXX: make-pathname forms are more portable, but namestrings
+        ;; are more readable. People should be using a recent ASDF, anyway.
+        (format nil "~S~:[~; :pathname #p~S~]" name pn-p pn))))
 
 ;; Used by additional-dependencies* and overridden-dependencies*.
 (defun map-over-instrumented-component-and-parents (component slot-name)
@@ -617,9 +639,6 @@
   (make-pathname :directory
 		 (normalize-pathname-directory-component (pathname-directory pathname))
 		 :defaults pathname))
-
-(defun normalized-component-name (component)
-  (pathname-name (asdf:component-relative-pathname component)))
 
 ;; Currently used only by initially-grovel-dependencies.
 (defun output-component-file (stream dependencies &key
