@@ -269,7 +269,7 @@
               :in (loop :for desc :in slot-descriptions :collect
                      (if (listp desc) desc (list desc)))
               ;; Get the symbol for this slot's accessor.
-              :as accessor-name :=
+              :for accessor-name =
                       (let* ((slot-name-str (symbol-name slot-name))
                              (accessor-name-str
                               (concatenate 'string prefix slot-name-str)))

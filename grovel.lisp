@@ -24,7 +24,7 @@
 
 ;; Currently unused.
 (defmacro symbol-macroify (operator name &rest args &environment env)
-  (let ((new-name (gentemp (format nil "ASDF-DEPENDENCY-GROVEL-~A--~A"
+  (let* ((new-name (gensym (format nil "ASDF-DEPENDENCY-GROVEL-~A--~A"
                                    operator name))))
     `(progn
        (define-symbol-macro ,name ,new-name)
@@ -501,16 +501,6 @@
 (defvar *asdf-has-sensible-component-names-p*
   (ignore-errors (<= 1.367 (read-from-string asdf::*asdf-revision*))))
 
-;; TODO: move that upstream into ASDF, so we can use it from there?
-(defun merge-component-relative-pathname (pathname name type)
-  (multiple-value-bind (relative path filename)
-      (split-path-string name)
-  (merge-pathnames
-   (or pathname (make-pathname :directory `(,relative ,@path)))
-   (if type
-       (make-pathname :name filename :type type)
-       filename))))
-
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
 (defun strip-extension (name extension)
@@ -789,6 +779,7 @@
 
 (defgeneric enclosing-file-constituent (constituent)
   (:method (x)
+    (declare (ignore x))
     nil)
   (:method ((x asdf-component-constituent))
     (when (typep (asdf-component-constituent-component x)
