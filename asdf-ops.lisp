@@ -69,11 +69,12 @@ to the base of the system."
   (wtf "Perform asdf:load-source-op ~S" comp)
   (let ((source (asdf:component-pathname comp)))
     ;; do NOT grovel the same file more than once
-    (unless (asdf:component-property comp 'last-loaded-as-source)
-      (setf (asdf:component-property comp 'last-loaded-as-source)
-            (and (fine-grain-instrumented-load ;;load
-                  source)
-                 (get-universal-time))))))
+    (operating-on-asdf-component-constituent (comp)
+      (unless (asdf:component-property comp 'last-loaded-as-source)
+        (setf (asdf:component-property comp 'last-loaded-as-source)
+              (and (fine-grain-instrumented-load ;;load
+                    source)
+                   (get-universal-time)))))))
 
 (defmethod asdf:perform :around
     ((op asdf:compile-op)

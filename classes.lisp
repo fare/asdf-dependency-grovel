@@ -135,8 +135,32 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defclass simple-print-object-mixin ()
+  ())
+
+(defun collect-slots (object slots)
+  (loop :for slot-spec :in slots :nconc
+    (if (functionp slot-spec)
+      (funcall slot-spec object)
+      (destructuring-bind (slot &optional
+                                (fun #'identity)
+                                (keyword (intern (symbol-name slot) :keyword)))
+          (if (consp slot-spec) slot-spec (list slot-spec))
+        (when (slot-boundp object slot)
+          (list keyword (funcall fun (slot-value object slot))))))))
+
+(defun simple-print-object (object stream &key identity (slots (slots-to-print object)))
+  (print-unreadable-object (object stream :type t :identity identity)
+    (write (collect-slots object slots) :stream stream)))
+
+(defgeneric slots-to-print (object)
+  (:method-combination append))
+
+(defmethod print-object ((object simple-print-object-mixin) stream)
+  (simple-print-object object stream :slots (slots-to-print object)))
+
 ;; Base class for constituents.
-(defclass constituent ()
+(defclass constituent (simple-print-object-mixin)
   ((parent
     :initarg :parent
     :initform nil
@@ -160,6 +184,13 @@
     :accessor constituent-provisions
     :documentation "A hashset of things provided by this constituent.")))
 
+(defmethod slots-to-print append ((con constituent))
+  `(,#'(lambda (x) (list :designator (constituent-designator x)))
+    (children ,#'length)
+    index
+    (uses ,#'hash-table-count)
+    (provisions ,#'hash-table-count)))
+
 (defmethod initialize-instance :after ((con constituent) &key)
   (let ((parent (slot-value con 'parent)))
     (when parent
@@ -181,6 +212,9 @@
     :initform (error "must supply a component")
     :reader asdf-component-constituent-component
     :documentation "The ASDF component.")))
+
+(defmethod slots-to-print append ((con asdf-component-constituent))
+  '(component))
 
 ;; A constituent representing a file.
 (defclass file-constituent (constituent)
@@ -214,6 +248,9 @@
     :initform (error "must supply a label")
     :reader temp-constituent-label
     :documentation "The label to use as the summary of this constituent.")))
+
+(defmethod slots-to-print append ((con temp-constituent))
+  '(label))
 
 (defun new-temp-constituent ()
   "Create a new temp-constituent with an automatically generated label."

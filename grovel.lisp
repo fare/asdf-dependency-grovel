@@ -783,7 +783,7 @@
     nil)
   (:method ((x asdf-component-constituent))
     (when (typep (asdf-component-constituent-component x)
-                 'instrumented-cl-source-file)
+                 'asdf:cl-source-file)
       x))
   (:method ((x file-constituent))
     x)
@@ -802,14 +802,14 @@
       :for filecon1 = (enclosing-file-constituent con1)
       :when (typep filecon1 'asdf-component-constituent) :do
       (let ((comp1 (asdf-component-constituent-component filecon1)))
-         (loop
-           :for con2 :being :each :hash-key :of deps
-           :for filecon2 = (enclosing-file-constituent con2)
-           :when (typep filecon2 'asdf-component-constituent) :do
-           (let ((comp2 (asdf-component-constituent-component con2)))
-              (pushnew comp2 (gethash comp1 component-deps))
-              (pushnew (asdf:component-system comp2)
-                       (gethash (asdf:component-system comp1) system-deps))))))
+        (loop
+          :for con2 :being :each :hash-key :of deps
+          :for filecon2 = (enclosing-file-constituent con2)
+          :when (typep filecon2 'asdf-component-constituent) :do
+          (let ((comp2 (asdf-component-constituent-component con2)))
+            (pushnew comp2 (gethash comp1 component-deps))
+            (pushnew (asdf:component-system comp2)
+                     (gethash (asdf:component-system comp1) system-deps))))))
     ;; Build and return the dependency forms.
     (loop :for system :in interesting-systems
           :collect `(,system
