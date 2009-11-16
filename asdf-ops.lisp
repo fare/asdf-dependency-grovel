@@ -172,14 +172,14 @@ to the base of the system."
                        "Component spec ~S in ~S didn't find a component."
                        compspec system)
                (apply #'reinitialize-instance component args))))
-    (loop for (system compspec . initargs) in additional-initargs
-          do (assert (member (asdf::coerce-name system) systems
-                             :key #'asdf::coerce-name
-                             :test #'equal)
-                     ()
-                     "Component translation in System ~A which is not a member of the ~
-                           systems to merge." system)
-          do (add-initargs system compspec initargs))))
+    (loop :for (system compspec . initargs) in additional-initargs :do
+      (assert (member (asdf::coerce-name system) systems
+                      :key #'asdf::coerce-name
+                      :test #'equal)
+              ()
+              "Component translation in System ~A which is not a member of the ~
+               systems to merge." system)
+      (add-initargs system compspec initargs))))
 
 (defmethod asdf:perform ((op dependency-op) (c component-file))
   (let ((tmp-file-name (format nil "~A-~A"
@@ -231,10 +231,43 @@ to the base of the system."
 
 ;;; Reading the component list back into asdf defsystems
 
+(defun %comp-file-reader (pathname system-names collector)
+  (with-open-file (f pathname :direction :input)
+    (let ((systems (read f))
+          (done-systems nil))
+      (labels ((do-1-system (system-name)
+                 (unless (position system-name done-systems
+                                   :test #'string-equal)
+                   (let ((system (assoc system-name systems
+                                              :test #'string-equal)))
+                     (funcall collector system)
+                     (push system-name done-systems)
+                     (getf (cdr system) :depends-on)))))
+        (loop :while system-names :do
+          (let ((system-name (pop system-names)))
+            (setf system-names (append system-names (do-1-system system-name)))))))))
+
+(defun read-component-file (pathname &rest system-names)
+  (let ((component-list nil))
+    (%comp-file-reader
+     pathname system-names
+     (lambda (system)
+       (setf component-list
+             (append component-list (getf (cdr system) :components)))))))
+
+(defun systems-in-configuration (pathname &rest system-names)
+  (let ((component-names nil))
+    (%comp-file-reader
+     pathname system-names
+     (lambda (system)
+       (when system
+         (push (first system) component-names))))))
+
+#|
+;; Old macro-ish version by antifuchs:
 (macrolet
     ((define-comp-file-reader (fname (1-system-var return-var)
                                      &body 1-system-body)
-         
          (let ((system-name (gensym))
                (system-names (gensym))
                (done-systems (gensym))
@@ -252,10 +285,10 @@ to the base of the system."
                                  (progn ,@1-system-body)
                                  (push ,system-name ,done-systems)
                                  (getf (cdr ,1-system-var) :depends-on)))))
-                    (loop while ,system-names
-                          for ,system-name = (pop ,system-names)
-                          do (setf ,system-names (append ,system-names
-                                                        (do-1-system ,system-name))))
+                    (loop :while ,system-names :do
+                      (let ((,system-name (pop ,system-names)))
+                        (setf ,system-names (append ,system-names
+                                                    (do-1-system ,system-name)))))
                     ,return-var)))))))
   (define-comp-file-reader read-component-file (system component-list)
     (setf component-list
@@ -263,6 +296,7 @@ to the base of the system."
   (define-comp-file-reader systems-in-configuration (system component-names)
     (when system
       (push (first system) component-names))))
+|#
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
