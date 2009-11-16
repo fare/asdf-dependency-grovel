@@ -72,7 +72,8 @@ to the base of the system."
     (operating-on-asdf-component-constituent (comp)
       (unless (asdf:component-property comp 'last-loaded-as-source)
         (setf (asdf:component-property comp 'last-loaded-as-source)
-              (and (fine-grain-instrumented-load ;;load
+              (and (#+sbcl fine-grain-instrumented-load ;;load
+                    #-sbcl instrumented-load
                     source)
                    (get-universal-time)))))))
 
@@ -227,7 +228,10 @@ to the base of the system."
 ;;                      :cull-redundant cull-redundant
 ;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
-    (rename-file tmp-file-name (first (asdf:output-files op c)))))
+    (let ((destination-file (first (asdf:output-files op c))))
+      #+clisp (delete-file destination-file)
+      (rename-file tmp-file-name destination-file
+                   #+clozure :if-exists #+clozure :rename-and-delete))))
 
 ;;; Reading the component list back into asdf defsystems
 

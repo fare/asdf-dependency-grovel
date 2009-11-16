@@ -635,10 +635,10 @@
                               (output-systems-and-dependencies-p t))
   (let ((*print-case* :downcase))
     (format stream ";;; This file contains -*- lisp -*- expressions.~%")
-    (format stream "~@<;;; ~@;AUTO-GENERATED file from system definition ~
-                              of system ~A.  Instead of directly editing this ~
-                              file, please edit the system definition~P ~
-                              and re-generate this file.~:@>"
+    (format stream ";;; AUTO-GENERATED file from system definition ~
+                        of system ~A.  Instead of directly editing this ~
+                        file, please edit the system definition~P ~
+                        and re-generate this file."
             (mapcar #'asdf:component-name (mapcar #'first dependencies))
             (length dependencies))
     (format stream "~&(~%")
