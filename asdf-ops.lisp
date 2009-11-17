@@ -229,7 +229,9 @@ to the base of the system."
 ;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
     (let ((destination-file (first (asdf:output-files op c))))
-      #+clisp (delete-file destination-file)
+      #+clisp
+      (posix:copy-file tmp-file-name destination-file :method :rename)
+      #-clisp
       (rename-file tmp-file-name destination-file
                    #+clozure :if-exists #+clozure :rename-and-delete))))
 
