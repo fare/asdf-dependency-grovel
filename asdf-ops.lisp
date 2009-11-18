@@ -183,9 +183,10 @@ to the base of the system."
       (add-initargs system compspec initargs))))
 
 (defmethod asdf:perform ((op dependency-op) (c component-file))
-  (let ((tmp-file-name (format nil "~A-~A"
-                               (first (asdf:output-files op c))
-                               (get-universal-time))))
+  (let* ((destination-file (first (asdf:output-files op c)))
+         (tmp-file-name (format nil "~A-~A"
+                                 destination-file
+                                 (get-universal-time))))
     (ensure-directories-exist tmp-file-name)
     (with-open-file (component-stream tmp-file-name
                                       :direction :output
@@ -228,12 +229,11 @@ to the base of the system."
 ;;                      :cull-redundant cull-redundant
 ;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
-    (let ((destination-file (first (asdf:output-files op c))))
-      #+clisp
-      (posix:copy-file tmp-file-name destination-file :method :rename)
-      #-clisp
-      (rename-file tmp-file-name destination-file
-                   #+clozure :if-exists #+clozure :rename-and-delete))))
+    #+clisp
+    (posix:copy-file tmp-file-name destination-file :method :rename)
+    #-clisp
+    (rename-file tmp-file-name destination-file
+                 #+clozure :if-exists #+clozure :rename-and-delete)))
 
 ;;; Reading the component list back into asdf defsystems
 
