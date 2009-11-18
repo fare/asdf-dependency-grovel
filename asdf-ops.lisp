@@ -230,7 +230,9 @@ to the base of the system."
 ;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
     #+clisp
-    (posix:copy-file tmp-file-name destination-file :method :rename)
+    (when (probe-file destination-file) (delete-file destination-file)) ;; Workaround BUG in CLISP 2.48, lose atomicity
+    #+clisp
+    (posix:copy-file tmp-file-name destination-file :method :rename :if-exists :overwrite)
     #-clisp
     (rename-file tmp-file-name destination-file
                  #+clozure :if-exists #+clozure :rename-and-delete)))
