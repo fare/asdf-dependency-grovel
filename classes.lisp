@@ -265,6 +265,12 @@
 (defgeneric constituent-designator (con)
   (:documentation "Return the unique designator of the constituent."))
 
+(defmethod constituent-designator ((con null))
+  nil)
+
+(defmethod constituent-designator ((con top-constituent))
+  t)
+
 (defmethod constituent-designator ((con constituent))
   (list* (class-of con) (constituent-index con)
          (constituent-designator (constituent-parent con))))
@@ -272,9 +278,6 @@
 (defmethod constituent-designator ((con form-constituent))
   (list* :form (constituent-index con)
          (constituent-designator (constituent-parent con))))
-
-(defmethod constituent-designator ((con top-constituent))
-  nil)
 
 (defmethod constituent-designator ((con asdf-component-constituent))
   (list* :asdf

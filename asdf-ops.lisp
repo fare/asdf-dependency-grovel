@@ -229,10 +229,8 @@ to the base of the system."
 ;;                      :cull-redundant cull-redundant
 ;;                      :debug-object-types debug-object-types
                       :base-pathname base-pathname))))))
-    #+clisp
-    (when (probe-file destination-file) (delete-file destination-file)) ;; Workaround BUG in CLISP 2.48, lose atomicity
-    #+clisp
-    (posix:copy-file tmp-file-name destination-file :method :rename :if-exists :overwrite)
+    #+clisp ;; But for a bug in CLISP 2.48, we should use :if-exists :overwrite and be atomic
+    (posix:copy-file tmp-file-name destination-file :method :rename)
     #-clisp
     (rename-file tmp-file-name destination-file
                  #+clozure :if-exists #+clozure :rename-and-delete)))
@@ -270,41 +268,6 @@ to the base of the system."
      (lambda (system)
        (when system
          (push (first system) component-names))))))
-
-#|
-;; Old macro-ish version by antifuchs:
-(macrolet
-    ((define-comp-file-reader (fname (1-system-var return-var)
-                                     &body 1-system-body)
-         (let ((system-name (gensym))
-               (system-names (gensym))
-               (done-systems (gensym))
-               (systems (gensym)))
-           `(defun ,fname (pathname &rest ,system-names)
-              (with-open-file (f pathname :direction :input)
-                (let ((,systems (read f))
-                      ,done-systems
-                      ,return-var)
-                  (labels ((do-1-system (,system-name)
-                             (unless (position ,system-name ,done-systems
-                                               :test #'string-equal)
-                               (let ((,1-system-var (assoc ,system-name ,systems
-                                                           :test #'string-equal)))
-                                 (progn ,@1-system-body)
-                                 (push ,system-name ,done-systems)
-                                 (getf (cdr ,1-system-var) :depends-on)))))
-                    (loop :while ,system-names :do
-                      (let ((,system-name (pop ,system-names)))
-                        (setf ,system-names (append ,system-names
-                                                    (do-1-system ,system-name)))))
-                    ,return-var)))))))
-  (define-comp-file-reader read-component-file (system component-list)
-    (setf component-list
-          (append component-list (getf (cdr system) :components))))
-  (define-comp-file-reader systems-in-configuration (system component-names)
-    (when system
-      (push (first system) component-names))))
-|#
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
