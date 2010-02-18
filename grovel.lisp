@@ -497,9 +497,8 @@
 
 ;; Used by maybe-translated-component-name and output-component-file.
 
-
 (defvar *asdf-has-sensible-component-names-p*
-  (ignore-errors (<= 1.367 (read-from-string asdf::*asdf-revision*))))
+  (and (find-symbol "*ASDF-VERSION*" :asdf) t))
 
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
