@@ -1,8 +1,6 @@
 ;;; -*- Mode: Lisp -*-
 
-(cl:defpackage #:asdf-dependency-grovel.system
-  (:use :asdf :cl))
-(cl:in-package #:asdf-dependency-grovel.system)
+(cl:in-package #:asdf)
 
 (defclass grovel-handlers (module)
      ((%components :accessor %handler-components)))
@@ -27,14 +25,15 @@
       (setf (%handler-components c)
             (handler-input-file-list (component-pathname c) c))))
 
-(defsystem asdf-dependency-grovel
+(defsystem :asdf-dependency-grovel
+  :depends-on (:asdf)
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))
                (:file "asdf-classes" :depends-on ("package"))
                (:file "grovel" :depends-on ("package" "variables" "classes" "asdf-classes"))
                (:file "asdf-ops" :depends-on ("package" "variables" "grovel"))
-               (grovel-handlers "handlers" :pathname #p"handlers/"
+               (:grovel-handlers "handlers" :pathname #p"handlers/"
                                 :depends-on ("grovel"))))
 
 (defmethod perform :after ((op load-op) (c (eql (find-system :asdf-dependency-grovel))))
