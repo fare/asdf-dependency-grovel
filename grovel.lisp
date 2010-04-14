@@ -498,7 +498,7 @@
 ;; Used by maybe-translated-component-name and output-component-file.
 
 (defvar *asdf-has-sensible-component-names-p*
-  (and (find-symbol "*ASDF-VERSION*" :asdf) t))
+  #+asdf2 t #-asdf2 nil)
 
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
@@ -521,7 +521,7 @@
 
 (defun enough-component-spec (c &optional pn-p)
   (multiple-value-bind (name pn) (normalized-component-name c)
-    (if (or *asdf-has-sensible-component-names-p* ;; means ASDF 1.367 or later.
+    (if (or *asdf-has-sensible-component-names-p* ;; means ASDF 2.
             (equal pn
                    (ignore-errors
                      (namestring (make-pathname
