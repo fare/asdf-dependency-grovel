@@ -497,9 +497,6 @@
 
 ;; Used by maybe-translated-component-name and output-component-file.
 
-(defvar *asdf-has-sensible-component-names-p*
-  #+asdf2 t #-asdf2 nil)
-
 (defun strip/ (name)
   (subseq name (1+ (or (position #\/ name :from-end t) -1))))
 (defun strip-extension (name extension)
@@ -521,16 +518,7 @@
 
 (defun enough-component-spec (c &optional pn-p)
   (multiple-value-bind (name pn) (normalized-component-name c)
-    (if (or *asdf-has-sensible-component-names-p* ;; means ASDF 2.
-            (equal pn
-                   (ignore-errors
-                     (namestring (make-pathname
-                                  :name (strip/ name)
-                                  :type (asdf:source-file-type c (asdf:component-system c)))))))
-        (write-to-string name)
-        ;; XXX: make-pathname forms are more portable, but namestrings
-        ;; are more readable. People should be using a recent ASDF, anyway.
-        (format nil "~S~:[~; :pathname #p~S~]" name pn-p pn))))
+    (write-to-string name)))
 
 ;; Used by additional-dependencies* and overridden-dependencies*.
 (defun map-over-instrumented-component-and-parents (component slot-name)

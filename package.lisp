@@ -1,6 +1,8 @@
 #+xcvb (module ())
 
-(cl:defpackage #:asdf-dependency-grovel
+(cl:in-package :asdf)
+
+(defpackage #:asdf-dependency-grovel
   (:use #:cl)
   (:export #:reload
            #:component-file
@@ -21,8 +23,22 @@
            #:fine-grain-instrumented-load
            #:print-big-ol-dependency-report))
 
-(cl:defpackage #:asdf-dependency-grovel.packages
+(defpackage #:asdf-dependency-grovel.packages
   (:use))
 
-(cl:defpackage #:asdf-dependency-grovel.lambdas
+(defpackage #:asdf-dependency-grovel.lambdas
   (:use))
+
+(in-package #:asdf-dependency-grovel)
+
+(defparameter *asdf-dependency-grovel-version* "1.100")
+(defparameter *asdf-version-required-by-adg* "1.702")
+
+#-asdf2
+(error "ASDF-DEPENDENCY-GROVEL requires ASDF2.")
+
+#+asdf2
+(unless (asdf:version-satisfies (asdf:asdf-version) *asdf-version-required-by-adg*)
+  (error "POIU ~A requires ASDF ~A or later."
+         *asdf-dependency-grovel-version*
+         *asdf-version-required-by-adg*))
