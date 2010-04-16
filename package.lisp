@@ -31,7 +31,7 @@
 
 (in-package #:asdf-dependency-grovel)
 
-(defparameter *asdf-dependency-grovel-version* "1.100")
+(defparameter *asdf-dependency-grovel-version* "1.101")
 (defparameter *asdf-version-required-by-adg* "1.702")
 
 #-asdf2

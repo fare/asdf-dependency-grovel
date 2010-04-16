@@ -514,11 +514,13 @@
   (let ((pn (enough-namestring (normalize-pathname-directory
                                 (asdf:component-pathname c))))
         (type (asdf:source-file-type c (asdf:component-system c))))
-    (values (strip-extension pn type) pn)))
+    (values (strip-extension pn type) pn type)))
 
-(defun enough-component-spec (c &optional pn-p)
-  (multiple-value-bind (name pn) (normalized-component-name c)
-    (write-to-string name)))
+(defun enough-component-spec (c)
+  (multiple-value-bind (name pn type) (normalized-component-name c)
+    (if (or (null type) (equal (concatenate 'string name "." type) pn))
+        (write-to-string name)
+        (format nil "~S :pathname #p~S" name pn))))
 
 ;; Used by additional-dependencies* and overridden-dependencies*.
 (defun map-over-instrumented-component-and-parents (component slot-name)
@@ -562,7 +564,7 @@
                (slot-value component 'translated-name))
               (and include-pathname
                    (slot-value component 'translated-pathname)))
-      (enough-component-spec component include-pathname)))
+      (enough-component-spec component)))
 
 ;; Used only by maybe-translated-component-class.
 (defun coerce-name (maybe-class)
