@@ -668,23 +668,26 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Constituent Support ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro with-constituent-groveling (&body body)
-  `(let (;; Set up tables for tracking variables and constants.
-         (*suspected-variables* (make-hashset :test 'eql))
-         (*suspected-constants* (make-hashset :test 'eql))
-         ;; Initialize an fresh constituent environment.
-         (*constituent-table* (make-hash-table :test #'equal))
-         (*current-constituent* (make-instance 'top-constituent))
-         ;; Set up machinery for checking internal symbols.
-         (*previous-package* *package*)
-         (*previously-interned-symbols*
-          (let ((hashset (make-hashset :test 'eql)))
-            (do-symbols (sym *package*)
-              (hashset-add sym hashset))
-            hashset))
-         (*check-internal-symbols-p* t)
-         ;; Indicate that we are groveling.
-         (*features* (adjoin :groveling *features*)))
-     ,@body))
+  `(call-with-constituent-groveling (lambda () ,@body)))
+
+(defun call-with-constituent-groveling (thunk)
+  (let (;; Set up tables for tracking variables and constants.
+        (*suspected-variables* (make-hashset :test 'eql))
+        (*suspected-constants* (make-hashset :test 'eql))
+        ;; Initialize an fresh constituent environment.
+        (*constituent-table* (make-hash-table :test #'equal))
+        (*current-constituent* (make-instance 'top-constituent))
+        ;; Set up machinery for checking internal symbols.
+        (*previous-package* *package*)
+        (*previously-interned-symbols*
+         (let ((hashset (make-hashset :test 'eql)))
+           (do-symbols (sym *package*)
+             (hashset-add sym hashset))
+           hashset))
+        (*check-internal-symbols-p* t)
+        ;; Indicate that we are groveling.
+        (*features* (adjoin :groveling *features*)))
+    (funcall thunk)))
 
 (defmacro operating-on-asdf-component-constituent ((component) &body body)
   "Used internally; not exported."

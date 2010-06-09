@@ -3,7 +3,7 @@
 (cl:in-package :asdf)
 
 (defpackage #:asdf-dependency-grovel
-  (:use #:cl)
+  (:use #:cl #:asdf)
   (:export #:reload
            #:component-file
            #:dependency-op
@@ -31,14 +31,14 @@
 
 (in-package #:asdf-dependency-grovel)
 
-(defparameter *asdf-dependency-grovel-version* "1.101")
-(defparameter *asdf-version-required-by-adg* "1.702")
+(defparameter *asdf-dependency-grovel-version* "1.102")
+(defparameter *asdf-version-required-by-adg* "2.000")
 
 #-asdf2
 (error "ASDF-DEPENDENCY-GROVEL requires ASDF2.")
 
 #+asdf2
 (unless (asdf:version-satisfies (asdf:asdf-version) *asdf-version-required-by-adg*)
-  (error "POIU ~A requires ASDF ~A or later."
+  (error "ASDF-DEPENDENCY-GROVEL ~A requires ASDF ~A or later."
          *asdf-dependency-grovel-version*
          *asdf-version-required-by-adg*))
