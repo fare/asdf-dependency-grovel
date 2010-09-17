@@ -567,7 +567,7 @@
       (enough-component-spec component)))
 
 ;; Used only by maybe-translated-component-class.
-(defun coerce-name (maybe-class)
+(defun coerce-class-name (maybe-class)
   (if (typep maybe-class 'standard-class)
       (class-name maybe-class)
       maybe-class))
@@ -583,7 +583,7 @@
      :file)
     ((and (eql (class-of component)
                (find-class (or
-                            (coerce-name
+                            (coerce-class-name
                              (asdf::module-default-component-class
                               (asdf:component-parent component)))
                             'asdf:cl-source-file))))

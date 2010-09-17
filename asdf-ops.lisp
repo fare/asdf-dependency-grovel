@@ -174,8 +174,8 @@ to the base of the system."
                        compspec system)
                (apply #'reinitialize-instance component args))))
     (loop :for (system compspec . initargs) in additional-initargs :do
-      (assert (member (asdf::coerce-name system) systems
-                      :key #'asdf::coerce-name
+      (assert (member (coerce-name system) systems
+                      :key #'coerce-name
                       :test #'equal)
               ()
               "Component translation in System ~A which is not a member of the ~
