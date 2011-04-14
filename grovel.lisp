@@ -57,7 +57,7 @@
   (let ((*macroexpand-hook* (if (boundp '*old-macroexpand-hook*)
                                 *old-macroexpand-hook*
                                 *macroexpand-hook*)))
-    (asdf:oos 'asdf:load-op :asdf-dependency-grovel)))
+    (asdf:load-system :asdf-dependency-grovel)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signaling Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

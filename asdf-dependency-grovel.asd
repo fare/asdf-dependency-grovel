@@ -26,7 +26,7 @@
             (handler-input-file-list (component-pathname c) c))))
 
 (defsystem :asdf-dependency-grovel
-  :depends-on (:asdf)
+  ;; :depends-on (:asdf) ; not safe. ASDF must be explicitly upgraded in advance.
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))
