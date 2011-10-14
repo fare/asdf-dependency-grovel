@@ -1,6 +1,10 @@
 ;;; -*- Mode: Lisp -*-
 
-(cl:in-package #:asdf)
+(cl:in-package :asdf)
+
+(unless (or #+asdf2 (asdf:version-satisfies (asdf:asdf-version) "2.014.8"))
+  (error "Not only is your ASDF version is too old for ASDF-DEPENDENCY-GROVEL,
+	you must upgrade it *before* you try to load any system."))
 
 (defclass grovel-handlers (module)
      ((%components :accessor %handler-components)))
@@ -26,7 +30,7 @@
             (handler-input-file-list (component-pathname c) c))))
 
 (defsystem :asdf-dependency-grovel
-  ;; :depends-on (:asdf) ; not safe. ASDF must be explicitly upgraded in advance.
+  :depends-on ((:version :asdf "2.017"))
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))
