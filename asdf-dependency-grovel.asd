@@ -2,7 +2,7 @@
 
 (cl:in-package :asdf)
 
-(unless (or #+asdf2 (asdf:version-satisfies (asdf:asdf-version) "2.014.8"))
+(unless (or #+asdf2 (version-satisfies (asdf-version) "2.014.8"))
   (error "Not only is your ASDF version is too old for ASDF-DEPENDENCY-GROVEL,
 	you must upgrade it *before* you try to load any system."))
 
@@ -10,18 +10,18 @@
      ((%components :accessor %handler-components)))
 
 (defun handler-input-file-list (pathname parent)
-  (map 'list
-       (lambda (f)
-         (make-instance 'cl-source-file
-            :name (pathname-name f)
-            :parent parent
-            :pathname f))
-       (sort (directory (make-pathname :defaults pathname
-                                       :name :wild
-                                       :type "lisp"
-                                       :version :newest))
-             #'string<
-             :key #'namestring)))
+  (mapcar
+   (lambda (f)
+     (make-instance 'cl-source-file
+                    :name (pathname-name f)
+                    :parent parent
+                    :pathname f))
+   (sort (directory (make-pathname :defaults pathname
+                                   :name :wild
+                                   :type "lisp"
+                                   :version :newest))
+         #'string<
+         :key #'namestring)))
 
 (defmethod module-components ((c grovel-handlers))
   (if (slot-boundp c '%components)
@@ -30,7 +30,15 @@
             (handler-input-file-list (component-pathname c) c))))
 
 (defsystem :asdf-dependency-grovel
-  :depends-on ((:version :asdf "2.017"))
+  :description "Analyse the dependencies in an ASDF system"
+  :long-description "ASDF-DEPENDENCY-GROVEL will analyse the actual dependencies in an ASDF system.
+Based on an analysis with file granularity ,
+it can output an optimized system definition,
+based on which compilation can be parallelized.
+Based on an analysis with form granularity,
+it can output a summary from which you can untangle
+the circularities in your build."
+  :depends-on ((:version :asdf "2.018.12")) ;; for full :around-compile support
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))

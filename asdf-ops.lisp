@@ -12,7 +12,6 @@ to the base of the system."
                                               (pathname-directory system-base-dir)
                                               :test #'equal)
                                     (length (pathname-directory output-file))))))
-    
     (list
      (if (or *current-constituent*
              (and (boundp '*old-macroexpand-hook*) *old-macroexpand-hook*))

@@ -26,10 +26,23 @@
   ()
   (:default-initargs :default-component-class 'instrumented-cl-source-file))
 
+(defun escaped-around-compile-hook (component)
+  (let ((around-compile (asdf::around-compile-hook component)))
+    (etypecase around-compile
+      ((or null string) around-compile)
+      (function (error "Can't convert around-compile hook ~S because it's a function object.~%Maybe you should use a lambda-expression instead?"
+                       around-compile))
+      ((or symbol cons)
+       (with-standard-io-syntax
+         (let ((*package* (find-package :cl)))
+           (write-to-string around-compile :readably t)))))))
+
 (defmethod additional-initargs :around ((comp instrumented-component))
   (flet ((slot-when-bound (slot-name initarg)
            (when (slot-boundp comp slot-name)
              `(,initarg ,(slot-value comp slot-name)))))
     `(,@(call-next-method)
+        ,@(when (asdf::around-compile-hook comp)
+            `(:around-compile (escaped-around-compile comp)))
         ,@(slot-when-bound 'translated-name :translated-name)
         ,@(slot-when-bound 'translated-pathname :translated-pathname-form))))
