@@ -281,7 +281,7 @@
 
 (defmethod constituent-designator ((con asdf-component-constituent))
   (list* :asdf
-         (asdf:component-pathname (asdf-component-constituent-component con))
+         (asdf::component-find-path (asdf-component-constituent-component con))
          (constituent-designator (constituent-parent con))))
 
 (defmethod constituent-designator ((con file-constituent))

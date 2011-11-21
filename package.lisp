@@ -28,17 +28,3 @@
 
 (defpackage #:asdf-dependency-grovel.lambdas
   (:use))
-
-(in-package #:asdf-dependency-grovel)
-
-(defparameter *asdf-dependency-grovel-version* "1.104")
-(defparameter *asdf-version-required-by-adg* "2.018.12")
-
-#-asdf2
-(error "ASDF-DEPENDENCY-GROVEL requires ASDF2.")
-
-#+asdf2
-(unless (asdf:version-satisfies (asdf:asdf-version) *asdf-version-required-by-adg*)
-  (error "ASDF-DEPENDENCY-GROVEL ~A requires ASDF ~A or later."
-         *asdf-dependency-grovel-version*
-         *asdf-version-required-by-adg*))

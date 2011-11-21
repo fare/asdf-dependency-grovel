@@ -2,7 +2,10 @@
 
 (cl:in-package :asdf)
 
-(unless (or #+asdf2 (version-satisfies (asdf-version) "2.014.8"))
+#-asdf2
+(error "ASDF-DEPENDENCY-GROVEL requires ASDF2.")
+
+(unless (version-satisfies (asdf-version) "2.014.8")
   (error "Not only is your ASDF version is too old for ASDF-DEPENDENCY-GROVEL,
 	you must upgrade it *before* you try to load any system."))
 
@@ -38,7 +41,8 @@ based on which compilation can be parallelized.
 Based on an analysis with form granularity,
 it can output a summary from which you can untangle
 the circularities in your build."
-  :depends-on ((:version :asdf "2.018.12")) ;; for full :around-compile support
+  :version "1.105"
+  :depends-on ((:version :asdf "2.018.16")) ;; for full :around-compile support
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))

@@ -57,7 +57,7 @@
   (let ((*macroexpand-hook* (if (boundp '*old-macroexpand-hook*)
                                 *old-macroexpand-hook*
                                 *macroexpand-hook*)))
-    (asdf:load-system :asdf-dependency-grovel)))
+    (load-system :asdf-dependency-grovel)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Signaling Functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -512,8 +512,8 @@
 
 (defun normalized-component-name (c)
   (let ((pn (enough-namestring (normalize-pathname-directory
-                                (asdf:component-pathname c))))
-        (type (asdf:source-file-type c (asdf:component-system c))))
+                                (component-pathname c))))
+        (type (source-file-type c (component-system c))))
     (values (strip-extension pn type) pn type)))
 
 (defun enough-component-spec (c)
@@ -524,7 +524,7 @@
 
 ;; Used by additional-dependencies* and overridden-dependencies*.
 (defun map-over-instrumented-component-and-parents (component slot-name)
-  (loop :for c = component :then (asdf:component-parent c)
+  (loop :for c = component :then (component-parent c)
         :until (null c)
         :when (and (typep c 'instrumented-component)
                    (slot-boundp c slot-name))
@@ -585,8 +585,8 @@
                (find-class (or
                             (coerce-class-name
                              (asdf::module-default-component-class
-                              (asdf:component-parent component)))
-                            'asdf:cl-source-file))))
+                              (component-parent component)))
+                            'cl-source-file))))
      :file)
     ;; instrumented components with output file types emit
     ;; their output file type
@@ -628,16 +628,16 @@
                         of system ~A.  Instead of directly editing this ~
                         file, please edit the system definition~P ~
                         and re-generate this file."
-            (mapcar #'asdf:component-name (mapcar #'first dependencies))
+            (mapcar #'component-name (mapcar #'first dependencies))
             (length dependencies))
     (format stream "~&(~%")
     (dolist (system dependencies)
       (destructuring-bind (system &key depends-on components) system
         (when output-systems-and-dependencies-p
           (format stream "~& (~S~@[ :depends-on ~:S~] :components~%  ("
-                  (asdf:component-name system)
-                  (delete (asdf:component-name system)
-                          (mapcar #'asdf:component-name depends-on)
+                  (component-name system)
+                  (delete (component-name system)
+                          (mapcar #'component-name depends-on)
                           :test #'equal)))
         (dolist (compspec components) ;; to sort: (components-in-traverse-order system components)
           (destructuring-bind (component &key depends-on) compspec
@@ -695,7 +695,7 @@
 
 (defun operate-on-asdf-component-constituent (component thunk)
   (operate-on-file-level-constituent
-   (list* :asdf (asdf:component-pathname component)
+   (list* :asdf (asdf::component-find-path component)
           (constituent-designator *current-constituent*))
    (lambda () (make-instance 'asdf-component-constituent
                              :parent *current-constituent*
@@ -763,8 +763,8 @@
 (defun asdf-system-file-components (system)
   "Flatten the tree of modules/components into a list that
    contains only the non-module components."
-  (loop :for component :in (asdf:module-components system)
-        :if (typep component 'asdf:module)
+  (loop :for component :in (module-components system)
+        :if (typep component 'module)
           :append (asdf-system-file-components component)
         :else
           :collect component))
@@ -775,7 +775,7 @@
     nil)
   (:method ((x asdf-component-constituent))
     (when (typep (asdf-component-constituent-component x)
-                 'asdf:cl-source-file)
+                 'cl-source-file)
       x))
   (:method ((x file-constituent))
     x)
@@ -800,8 +800,8 @@
           :when (typep filecon2 'asdf-component-constituent) :do
           (let ((comp2 (asdf-component-constituent-component con2)))
             (pushnew comp2 (gethash comp1 component-deps))
-            (pushnew (asdf:component-system comp2)
-                     (gethash (asdf:component-system comp1) system-deps))))))
+            (pushnew (component-system comp2)
+                     (gethash (component-system comp1) system-deps))))))
     ;; Build and return the dependency forms.
     (loop :for system :in interesting-systems
           :collect `(,system
@@ -826,7 +826,7 @@
     (with-constituent-groveling
       (dolist (system systems)
         (operating-on-asdf-component-constituent (system)
-          (asdf:operate 'asdf:load-op system :verbose verbose)))
+          (operate 'load-op system :verbose verbose)))
       (with-open-file
 	  (dependency-report-stream "/tmp/depreport.sexp"
 				    :direction :output
