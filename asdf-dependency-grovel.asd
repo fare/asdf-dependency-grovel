@@ -41,8 +41,8 @@ based on which compilation can be parallelized.
 Based on an analysis with form granularity,
 it can output a summary from which you can untangle
 the circularities in your build."
-  :version "1.105"
-  :depends-on ((:version :asdf "2.018.16")) ;; for full :around-compile support
+  :version "1.106"
+  :depends-on ((:version :asdf "2.21")) ;; for :encoding support
   :components ((:file "package")
                (:file "variables" :depends-on ("package"))
                (:file "classes" :depends-on ("package" "variables"))
