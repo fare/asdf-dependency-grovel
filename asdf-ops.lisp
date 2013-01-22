@@ -143,7 +143,7 @@ to the base of the system."
 ;;; XXX: nasty hack.
 ;;; Necessary to support asd files that weren't rewritten to use
 ;;; instrumented-module/instrumented-cl-source-file classes.
-(defmethod :module-default-component-class :around ((c module))
+(defmethod module-default-component-class :around ((c module))
   (let ((what-would-asdf-do (call-next-method)))
     (if (member what-would-asdf-do `(nil cl-source-file
                                          ,(find-class 'cl-source-file)))
