@@ -1,14 +1,9 @@
 ;;; -*- Mode: Lisp -*-
 
-(cl:in-package :asdf)
-
-#-asdf2
-(error "ASDF-DEPENDENCY-GROVEL requires ASDF2.")
+(in-package :asdf)
 
 #-asdf3
-(unless (version-satisfies (asdf-version) "2.14.8") ; officially named 2.014.8, ouch.
-  (error "Not only is your ASDF version is too old for ASDF-DEPENDENCY-GROVEL,
-	you must upgrade it *before* you try to load any system."))
+(error "ASDF-DEPENDENCY-GROVEL requires ASDF3.")
 
 (defclass grovel-handlers (module)
      ((%components :accessor %handler-components)))
