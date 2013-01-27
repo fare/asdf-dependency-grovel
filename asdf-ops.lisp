@@ -66,14 +66,11 @@ to the base of the system."
      (comp instrumented-cl-source-file))
   (wtf "Perform load-source-op ~S" comp)
   (let ((source (component-pathname comp)))
-    ;; do NOT grovel the same file more than once
     (operating-on-asdf-component-constituent (comp)
-      (unless (component-property comp 'last-loaded-as-source)
-        (setf (component-property comp 'last-loaded-as-source)
-              (and (#+sbcl fine-grain-instrumented-load ;;load
-                    #-sbcl instrumented-load
-                    source)
-                   (get-universal-time)))))))
+      ;; do NOT grovel the same file more than once
+      (unless (component-operation-time 'load-source-op comp)
+        (#+sbcl fine-grain-instrumented-load #-sbcl instrumented-load
+         source)))))
 
 (defmethod perform :around
     ((op compile-op)
