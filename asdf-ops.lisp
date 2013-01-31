@@ -68,7 +68,7 @@ to the base of the system."
   (let ((source (component-pathname comp)))
     (operating-on-asdf-component-constituent (comp)
       ;; do NOT grovel the same file more than once
-      (unless (component-operation-time 'load-source-op comp)
+      (unless (asdf::component-operation-time 'load-source-op comp)
         (#+sbcl fine-grain-instrumented-load #-sbcl instrumented-load
          source)))))
 
