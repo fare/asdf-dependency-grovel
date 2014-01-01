@@ -265,7 +265,9 @@ to the base of the system."
          (push (first system) component-names))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+#|
+;; Used by qres's lisp/make-qres-dependencies.lisp,
+;; needs code deleted in 3df5023fc5ebae41141996861df44d471b1fb539 to be reinstated.
 (defclass compare-dependency-op (dependency-op) ())
 
 (defmethod input-files ((op compare-dependency-op) (c component-file))
@@ -304,5 +306,5 @@ to the base of the system."
                                             :debug-object-types debug-object-types
                                             :base-pathname base-pathname))
        (rename-file tmp-pathname out-pathname))))
-
+|#
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
