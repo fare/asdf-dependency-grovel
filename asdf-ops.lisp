@@ -109,7 +109,7 @@ to the base of the system."
       (:foo-system (\"component2\") :data-files ())"))))
 
 ;; Used by XCVB.
-(defclass dependency-op (operation) ())
+(defclass dependency-op (downward-operation) ())
 
 (defun state-of (op component)
   (declare (ignore op))
@@ -266,47 +266,43 @@ to the base of the system."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; ;; Unused.
-;; (defclass compare-dependency-op (dependency-op) ())
+(defclass compare-dependency-op (dependency-op) ())
 
-;; ;; Unused.
-;; (defmethod input-files ((op compare-dependency-op) (c component-file))
-;;   (append (call-next-method) (list (slot-value c 'base-asd-file))))
+(defmethod input-files ((op compare-dependency-op) (c component-file))
+  (append (call-next-method) (list (slot-value c 'base-asd-file))))
 
-;; ;; Unused.
-;; (defmethod output-files ((op compare-dependency-op) (c component-file))
-;;   (append (call-next-method) (list (slot-value c 'output-file))))
+(defmethod output-files ((op compare-dependency-op) (c component-file))
+  (append (call-next-method) (list (slot-value c 'output-file))))
 
-;; ;; Unused.
-;; (defmethod perform ((op compare-dependency-op) (c component-file))
-;;   ;; not incremental yet (but it's mostly useless anyway for large systems?)
-;;   (with-slots (load-system merge-systems base-asd-file output-file
-;;                component-name-translation cull-redundant verbose
-;;                additional-initargs base-pathname debug-object-types) c
-;;     (let* ((base-pathname (or (and (slot-boundp c 'base-pathname)
-;;                                    base-pathname)
-;;                               (truename
-;;                                (make-pathname :name nil
-;;                                               :type nil
-;;                                               :defaults
-;;                                               (component-pathname c)))))
-;;            (out-pathname (pathname (first (output-files op c))))
-;;            (tmp-pathname (make-pathname
-;;                            :name (format nil "~A-~A" (pathname-name out-pathname) (get-universal-time))
-;;                            :defaults out-pathname)))
-;;        (load-instrumented-systems merge-systems additional-initargs)
-;;        (prog1
-;;            (grovel-and-compare-dependencies (mapcar #'find-system
-;;                                                     (if (consp load-system)
-;;                                                       load-system
-;;                                                       (list load-system)))
-;;                                             base-asd-file
-;;                                             (mapcar #'find-system merge-systems)
-;;                                             :output tmp-pathname
-;;                                             :verbose verbose
-;;                                             :cull-redundant cull-redundant
-;;                                             :debug-object-types debug-object-types
-;;                                             :base-pathname base-pathname))
-;;        (rename-file tmp-pathname out-pathname))))
+(defmethod perform ((op compare-dependency-op) (c component-file))
+  ;; not incremental yet (but it's mostly useless anyway for large systems?)
+  (with-slots (load-system merge-systems base-asd-file output-file
+               component-name-translation cull-redundant verbose
+               additional-initargs base-pathname debug-object-types) c
+    (let* ((base-pathname (or (and (slot-boundp c 'base-pathname)
+                                   base-pathname)
+                              (truename
+                               (make-pathname :name nil
+                                              :type nil
+                                              :defaults
+                                              (component-pathname c)))))
+           (out-pathname (pathname (first (output-files op c))))
+           (tmp-pathname (make-pathname
+                           :name (format nil "~A-~A" (pathname-name out-pathname) (get-universal-time))
+                           :defaults out-pathname)))
+       (load-instrumented-systems merge-systems additional-initargs)
+       (prog1
+           (grovel-and-compare-dependencies (mapcar #'find-system
+                                                    (if (consp load-system)
+                                                      load-system
+                                                      (list load-system)))
+                                            base-asd-file
+                                            (mapcar #'find-system merge-systems)
+                                            :output tmp-pathname
+                                            :verbose verbose
+                                            :cull-redundant cull-redundant
+                                            :debug-object-types debug-object-types
+                                            :base-pathname base-pathname))
+       (rename-file tmp-pathname out-pathname))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
