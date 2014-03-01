@@ -109,7 +109,10 @@ to the base of the system."
       (:foo-system (\"component2\") :data-files ())"))))
 
 ;; Used by XCVB.
-(defclass dependency-op (downward-operation) ())
+(defclass dependency-op (load-source-op)
+  ((selfward-operation :initform 'prepare-dependency-op)))
+(defclass prepare-dependency-op (prepare-source-op)
+  ((sideway-operation :initform 'dependency-op)))
 
 (defun state-of (op component)
   (declare (ignore op))
@@ -118,9 +121,6 @@ to the base of the system."
 (defun (setf state-of) (new-val op component)
   (declare (ignore op))
   (setf (slot-value component 'last-grovel-state) new-val))
-
-(defmethod source-file-type ((c component-file) (s module))
-  "asd")
 
 (defmethod output-files ((op dependency-op) (c component-file))
   (list
