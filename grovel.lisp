@@ -596,7 +596,7 @@
     (t
      (class-name (class-of component)))))
 
-(defun normalize-pathname-directory-component (pathname-directory)
+(defun normalize-pathname-directory-component* (pathname-directory)
   (and pathname-directory
        (loop
          :with ups = nil
@@ -616,7 +616,7 @@
 
 (defun normalize-pathname-directory (pathname)
   (make-pathname :directory
-		 (normalize-pathname-directory-component (pathname-directory pathname))
+		 (normalize-pathname-directory-component* (pathname-directory pathname))
 		 :defaults pathname))
 
 ;; Currently used only by initially-grovel-dependencies.

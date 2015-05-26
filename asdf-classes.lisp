@@ -44,6 +44,6 @@
     `(,@(call-next-method)
         ,@(when (asdf::around-compile-hook comp)
             `(:around-compile ,(escaped-around-compile-hook comp)))
-	`(:encoding ,(component-encoding comp))
+        ,@(when (slot-boundp comp 'asdf/component::%encoding) `(:encoding ,(component-encoding comp)))
         ,@(slot-when-bound 'translated-name :translated-name)
         ,@(slot-when-bound 'translated-pathname :translated-pathname-form))))

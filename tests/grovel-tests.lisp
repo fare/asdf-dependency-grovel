@@ -8,6 +8,12 @@
 
 (cl:in-package :asdf-dependency-grovel-tester)
 
+(proclaim '(optimize (speed 1) (safety 2) (debug 3)))
+
+(defparameter *adg-dir* (pathname-parent-directory-pathname *load-truename*))
+(defparameter *adg-test-dir* (subpathname *adg-dir* "tests/"))
+(chdir *adg-test-dir*)
+
 
 (define-condition failed-component ()
   ((file :accessor failed-file :initarg :file)
@@ -17,7 +23,8 @@
 (defun canonicalize-name (name)
   (subseq name (mismatch "u-" name) (position #\. name)))
 
-(defun 1-component (all-comps &key file depends-on)
+(defun 1-component (all-comps &key file depends-on (encoding nil encodingsp))
+  (declare (ignore encoding encodingsp))
   (when (eql 2 (mismatch "u-" file))
     (let* ((name (canonicalize-name file))
            (provider-comp (format nil "p-~A" name))
@@ -37,18 +44,14 @@
                :file file :should dependency
                :has depends-on)))))
 
-(defparameter *adg-dir* (pathname-parent-directory-pathname *load-truename*))
-
-(push *adg-dir* *central-registry*)
-(push (subpathname *adg-dir* "tests/") *central-registry*)
-
 ;; (setf *break-on-signals* '(or error warning))
 (load-system "asdf-dependency-grovel")
 
 (defun test-result ()
   (asdf:operate 'asdf-dependency-grovel:dependency-op :test-serial)
   (let ((comps (asdf-dependency-grovel:read-component-file
-                "groveled-components.lisp" :test-serial-system))
+                (funcall *output-translation-function* (subpathname *adg-test-dir* "groveled-components.lisp"))
+                :test-serial-system))
         (failed nil))
     (loop for comp in comps
           do (handler-case (apply #'1-component comps comp)

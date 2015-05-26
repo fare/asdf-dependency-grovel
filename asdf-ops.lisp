@@ -249,12 +249,11 @@ to the base of the system."
             (setf system-names (append system-names (do-1-system system-name)))))))))
 
 (defun read-component-file (pathname &rest system-names)
-  (let ((component-list nil))
+  (while-collecting (c)
     (%comp-file-reader
      pathname system-names
      (lambda (system)
-       (setf component-list
-             (append component-list (getf (cdr system) :components)))))))
+       (map () #'c (getf (cdr system) :components))))))
 
 (defun systems-in-configuration (pathname &rest system-names)
   (let ((component-names nil))

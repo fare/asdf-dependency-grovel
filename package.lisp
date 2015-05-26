@@ -1,9 +1,7 @@
 #+xcvb (module ())
 
-(cl:in-package :asdf)
-
-(defpackage #:asdf-dependency-grovel
-  (:use #:cl #:asdf)
+(defpackage :asdf-dependency-grovel
+  (:use :cl :asdf :uiop)
   (:export #:reload
            #:component-file
            #:dependency-op
@@ -23,8 +21,8 @@
            #:fine-grain-instrumented-load
            #:print-big-ol-dependency-report))
 
-(defpackage #:asdf-dependency-grovel.packages
+(defpackage :asdf-dependency-grovel.packages
   (:use))
 
-(defpackage #:asdf-dependency-grovel.lambdas
+(defpackage :asdf-dependency-grovel.lambdas
   (:use))
