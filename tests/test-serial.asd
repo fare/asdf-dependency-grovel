@@ -1,22 +1,15 @@
 ;; -*- Mode: Lisp -*-
 
-(cl:in-package :cl-user)
-
-;; load groveler, for the component type, etc.
-(eval-when (:load-toplevel :execute)
-  (asdf:oos 'asdf:load-op :asdf-dependency-grovel))
-
-(defpackage :asdf-dependency-grovel-test.system
-  (:use :cl :asdf :asdf-dependency-grovel))
-
-(in-package :asdf-dependency-grovel-test.system)
-
-(defsystem :test-serial
-  :components ((component-file :asdf-dependency-grovel-test/serial
-                               :load-systems (:test-serial-system)
-                               :merge-systems (:test-serial-system)
-                               :output-file "groveled-components.lisp"
-                               :base-asd-file "groveled-components.output.asd"
-;;                               :cull-redundant t
-                               :verbose t)))
-
+(defsystem "test-serial"
+  :author "Andreas Fuchs, Matthew Steele and Francois-Rene Rideau"
+  :description "Test system for asdf-dependency-grovel"
+  :defsystem-depends-on ("asdf-dependency-grovel")
+  :version "1"
+  :components (("asdf-dependency-grovel::component-file" "asdf-dependency-grovel-test/serial"
+                :pathname ""
+                :load-systems (:test-serial-system)
+                :merge-systems (:test-serial-system)
+                :output-file "groveled-components.lisp"
+                :base-asd-file "groveled-components.output.asd"
+                ;;:cull-redundant t
+                :verbose t)))

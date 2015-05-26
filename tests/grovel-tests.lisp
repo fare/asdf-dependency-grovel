@@ -1,12 +1,13 @@
 ;;; Define the package of the test framework
+(cl:require "asdf")
+#-asdf3.1 (error "ASDF 3.1 required")
+
 (cl:defpackage :asdf-dependency-grovel-tester
-  (:use :cl)
+  (:use :cl :asdf :uiop)
   (:export #:test-result #:check-base-deps))
 
 (cl:in-package :asdf-dependency-grovel-tester)
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (require :asdf))
 
 (define-condition failed-component ()
   ((file :accessor failed-file :initarg :file)
@@ -36,15 +37,16 @@
                :file file :should dependency
                :has depends-on)))))
 
-(load "../asdf-dependency-grovel.asd")
-(push *load-truename* asdf:*central-registry*)
+(defparameter *adg-dir* (pathname-parent-directory-pathname *load-truename*))
+
+(push *adg-dir* *central-registry*)
+(push (subpathname *adg-dir* "tests/") *central-registry*)
+
 ;; (setf *break-on-signals* '(or error warning))
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (asdf:oos 'asdf:load-op :asdf-dependency-grovel))
-(push #p"." asdf:*central-registry*)
+(load-system "asdf-dependency-grovel")
 
 (defun test-result ()
-  (asdf:oos 'asdf-dependency-grovel:dependency-op :test-serial)
+  (asdf:operate 'asdf-dependency-grovel:dependency-op :test-serial)
   (let ((comps (asdf-dependency-grovel:read-component-file
                 "groveled-components.lisp" :test-serial-system))
         (failed nil))

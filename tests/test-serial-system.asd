@@ -1,6 +1,9 @@
 ;;; -*- lisp -*-
 
-(asdf:defsystem :test-serial-system
+(asdf:defsystem "test-serial-system"
+  :author "Andreas Fuchs, Matthew Steele and Francois-Rene Rideau"
+  :description "Test system for asdf-dependency-grovel"
+  :version "1"
   :serial t
   :components ((:file "package")
 
